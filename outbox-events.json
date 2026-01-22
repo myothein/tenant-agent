@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "tenantId": "all",
+    "exportedAt": "2025-12-31T08:58:08.177Z",
+    "count": 1
+  },
+  "events": [
+    {
+      "id": "5a61b792-5b8e-4e87-aaa0-52938a4634e4",
+      "tenantId": "SCH001",
+      "type": "test-event",
+      "payload": {
+        "foo": "bar"
+      },
+      "createdAt": "2025-12-31T04:26:05.222Z",
+      "sent": true,
+      "status": "pending"
+    }
+  ]
+}

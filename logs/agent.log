@@ -1,0 +1,28 @@
+
+tenant-agent CLI
+
+Tenant infrastructure agent for SMS
+
+Usage: tenant-agent [options] [command]
+
+Commands:
+  status       Show tenant agent status and heartbeat
+  sync         Sync tenant events with system
+  migrate      Run outbox database migrations
+  backup       Backup tenant outbox database
+  restore      Restore tenant outbox database from a backup file
+  clean-db     Delete the local tenant outbox database safely
+  export-events Export local outbox events to a JSON file
+  import-events Import events from a JSON file into local outbox
+  start        Start the Tenant Agent (heartbeat + local_event sync + outbox flush)
+  test-sync    Send a test event to the system API
+  doctor       Run health checks on tenant agent
+  outbox       List all events in the persistent outbox
+  flush-outbox Flush all unsent events from outbox to the system API
+  retry-unsent Retry sending all unsent events from the outbox
+  heartbeat-status Check the last heartbeat status for this tenant
+
+Options:
+  -V, --version        output the version number
+  -h, --help           display help for command
+
