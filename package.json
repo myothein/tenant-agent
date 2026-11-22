@@ -8,7 +8,8 @@
   "scripts": {
     "dev": "tsx src/index.ts",
     "build": "tsc",
-    "start": "tsx src/start.ts"
+    "start": "tsx src/start.ts",
+    "test": "npm run build && node --test dist/__tests__/*.test.js"
   },
   "dependencies": {
     "@types/fs-extra": "^11.0.4",

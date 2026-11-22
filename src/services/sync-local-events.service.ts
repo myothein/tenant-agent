@@ -1,9 +1,9 @@
 import Database from "better-sqlite3";
 import axios from "axios";
-import { v4 as uuid } from "uuid";
+import fs from "node:fs";
 import { config } from "../config/tenant-agent.config.js";
 import { Logger } from "../utils/logger.js";
-import { randomUUID } from "crypto";
+import { tenantAgentAuthHeaders, toOutboxRecord } from "./event-sync-contract.js";
 import { systemApi } from "../system-api/client.js"; // adjust path
 
 /* ============================
@@ -38,11 +38,12 @@ export class LocalEventsSyncService {
 
     constructor(
         tenantId: string,
-        tenantServiceUrl: string = "http://localhost:3000"
+        tenantServiceUrl: string = config.tenantServiceUrl
     ) {
         this.tenantId = tenantId;
         this.tenantServiceUrl = tenantServiceUrl;
 
+        fs.mkdirSync("data", { recursive: true });
         this.outboxDb = new Database("data/outbox.db");
 
         this.outboxDb.prepare(`
@@ -83,17 +84,18 @@ export class LocalEventsSyncService {
     async fetchPendingEvents(): Promise<LocalEvent[]> {
         try {
             const res = await axios.get(
-                `${this.tenantServiceUrl}/local-events/pending`
+                `${this.tenantServiceUrl}/local-events/pending`,
+                { headers: tenantAgentAuthHeaders(), timeout: 10_000 }
             );
-
-            return Array.isArray(res.data?.data)
-                ? res.data.data
-                : [];
+            if (!Array.isArray(res.data?.data)) {
+                throw new Error('Invalid pending events response');
+            }
+            return res.data.data as LocalEvent[];
         } catch (err: any) {
             Logger.error(
                 `[Tenant-Agent] Failed to fetch local_events: ${err.message}`
             );
-            return [];
+            throw err;
         }
     }
 
@@ -119,7 +121,9 @@ export class LocalEventsSyncService {
 
             try {
                 await axios.patch(
-                    `${this.tenantServiceUrl}/local-events/${event.id}/mark-sent`
+                    `${this.tenantServiceUrl}/local-events/${event.id}/mark-sent`,
+                    null,
+                    { headers: tenantAgentAuthHeaders(), timeout: 10_000 }
                 );
                 Logger.info(`[Tenant-Agent] Marked sent: ${event.id}`);
             } catch (err: any) {
@@ -140,8 +144,9 @@ export class LocalEventsSyncService {
 
 
     addToOutbox(event: LocalEvent) {
+        const record = toOutboxRecord(event, this.tenantId);
         const stmt = this.outboxDb.prepare(`
-        INSERT INTO outbox (
+        INSERT OR IGNORE INTO outbox (
             id,
             tenantId,
             agentId,
@@ -160,20 +165,10 @@ export class LocalEventsSyncService {
     `);
 
         const values = [
-            randomUUID(),                           // id
-            this.tenantId,                          // tenantId
-            event.agent_id ?? "tenant-agent",       // agentId
-            event.aggregate_type,                   // aggregate_type
-            event.aggregate_id,                     // aggregate_id
-            event.event_type,                       // event_type
-            JSON.stringify(event.payload ?? {}),    // payload
-            event.created_at ?? new Date().toISOString(), // createdAt
-            event.occurred_at ?? new Date().toISOString(), // occurredAt
-            0,                                      // sent
-            "pending",                              // status
-            event.retry_count ?? 0,                 // retry_count
-            event.event_version ?? 1,               // event_version
-            JSON.stringify(event.headers ?? {})     // headers
+            record.id, record.tenantId, record.agentId,
+            record.aggregate_type, record.aggregate_id, record.event_type,
+            record.payload, record.createdAt, record.occurredAt,
+            0, 'pending', record.retry_count, record.event_version, record.headers
         ];
 
         // 🔒 Guard rail (debug lifesaver)
