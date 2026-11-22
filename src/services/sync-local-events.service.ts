@@ -35,6 +35,8 @@ export class LocalEventsSyncService {
     private outboxDb: Database.Database;
     private tenantServiceUrl: string;
     private tenantId: string;
+    private syncTimer: NodeJS.Timeout | null = null;
+    private inFlight: Promise<void> | null = null;
 
     constructor(
         tenantId: string,
@@ -66,8 +68,29 @@ export class LocalEventsSyncService {
         `).run();
     }
 
-    /** Release the SQLite connection for clean shutdown and deterministic QA. */
-    close() { this.outboxDb.close(); }
+    /** Stop timers and drain in-flight events before closing the durable outbox. */
+    close() {
+        if (this.syncTimer || this.inFlight) {
+            throw new Error('Stop sync operations before closing the SQLite outbox');
+        }
+        this.outboxDb.close();
+    }
+
+    /** SQLite native backup is WAL-aware; never copy a live database file directly. */
+    async backupTo(destination: string): Promise<void> {
+        await this.outboxDb.backup(destination);
+    }
+
+    /** Never delete an event that has not been acknowledged by the central server. */
+    cleanSentEvents(retentionMs: number): number {
+        if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) {
+            throw new Error('Invalid event retention');
+        }
+        const cutoff = new Date(Date.now() - retentionMs).toISOString();
+        return this.outboxDb.prepare(
+            'DELETE FROM outbox WHERE sent=1 AND createdAt < ?'
+        ).run(cutoff).changes;
+    }
 
     /* ============================
        Helpers
@@ -296,31 +319,37 @@ export class LocalEventsSyncService {
 
 
     /* ============================
-       Start loop (CLI)
+       Controlled background synchronization
     ============================ */
 
-    start(intervalMs = config.syncIntervalMs) {
-        Logger.info(
-            `[Tenant-Agent] Sync loop started for tenant ${this.tenantId}`
-        );
-
-        const run = async () => {
-            try {
-                const polled = await this.pollLocalEvents();
-                if (polled > 0) {
-                    Logger.info(`[Tenant-Agent] Polled ${polled} local events`);
+    start(intervalMs: number = config.syncIntervalMs): void {
+        if (this.syncTimer) return;
+        if (!Number.isSafeInteger(intervalMs) || intervalMs < 25) {
+            throw new Error('Sync interval must be at least 25 milliseconds');
+        }
+        const tick = () => {
+            if (this.inFlight) return; // prevent concurrent polling or duplicate deliveries
+            this.inFlight = (async () => {
+                try {
+                    await this.pollLocalEvents();
+                } catch (error) {
+                    Logger.error('[Sync] Local polling failed; durable pending events remain queued');
                 }
-
-                const flushed = await this.flushOutbox();
-                if (flushed > 0) {
-                    Logger.info(`[Tenant-Agent] Flushed ${flushed} events`);
+                try {
+                    await this.flushOutbox();
+                } catch (error) {
+                    Logger.error('[Sync] Central flush failed; durable events remain queued');
                 }
-            } catch (err: any) {
-                Logger.error(`[Sync] Error during sync: ${err.message}`);
-            }
+            })().finally(() => { this.inFlight = null; });
         };
+        tick();
+        this.syncTimer = setInterval(tick, intervalMs);
+        Logger.info('[Tenant-Agent] Controlled local-event sync loop started');
+    }
 
-        run();
-        setInterval(run, intervalMs);
+    async stop(): Promise<void> {
+        if (this.syncTimer) clearInterval(this.syncTimer);
+        this.syncTimer = null;
+        if (this.inFlight) await this.inFlight;
     }
 }
