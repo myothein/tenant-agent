@@ -9,9 +9,10 @@
     "dev": "tsx src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "npm run build && node --test dist/__tests__/event-sync-contract.test.js dist/__tests__/system-api-contract.test.js",
+    "test": "npm run build && node --test dist/__tests__/event-sync-contract.test.js dist/__tests__/system-api-contract.test.js dist/__tests__/startup-mode.test.js",
     "test:sqlite": "npm run build && node --test dist/__tests__/sqlite.integration.test.js",
-    "test:e2e": "npm run build && node --test dist/__tests__/full-sync.integration.test.js"
+    "test:e2e": "npm run build && node --test dist/__tests__/full-sync.integration.test.js",
+    "test:windows-process": "npm run build && node scripts/qa/windows-tenant-agent-process.cjs"
   },
   "dependencies": {
     "@types/fs-extra": "^11.0.4",
