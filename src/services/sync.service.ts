@@ -128,11 +128,9 @@ export class SyncService {
                         tenantId: event.tenantId,
                         agentId: event.agentId ?? "agent-1",
                         event_type: event.event_type,
-                        payload: {
-                            ...event.payload,
-                            aggregate_type: event.aggregate_type,
-                            aggregate_id: event.aggregate_id,
-                        },
+                        aggregate_type: event.aggregate_type,
+                        aggregate_id: event.aggregate_id,
+                        payload: event.payload,
                         createdAt: new Date(event.createdAt).toISOString(),
                         occurredAt: new Date(event.occurredAt).toISOString(),
                     };

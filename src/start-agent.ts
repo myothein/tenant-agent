@@ -1,4 +1,4 @@
-import axios from "axios";
+import { systemApi } from "./system-api/client.js";
 import { config } from "./config/tenant-agent.config.js";
 import { SyncService } from "./services/sync.service.js";
 import fs from "fs-extra";
@@ -22,7 +22,7 @@ export async function startAgent() {
     // Heartbeat
     const sendHeartbeat = async () => {
         try {
-            await axios.post(`${config.systemApiUrl}/heartbeat`, { tenantId: config.tenantId });
+            await systemApi.sendHeartbeat({ tenantId: config.tenantId, sentAt: Date.now() });
             console.log(`[Heartbeat] Success`);
         } catch (err: any) {
             console.error(`[Heartbeat] Failed: ${err.message}`);
