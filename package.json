@@ -10,7 +10,8 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "npm run build && node --test dist/__tests__/event-sync-contract.test.js dist/__tests__/system-api-contract.test.js",
-    "test:sqlite": "npm run build && node --test dist/__tests__/sqlite.integration.test.js"
+    "test:sqlite": "npm run build && node --test dist/__tests__/sqlite.integration.test.js",
+    "test:e2e": "npm run build && node --test dist/__tests__/full-sync.integration.test.js"
   },
   "dependencies": {
     "@types/fs-extra": "^11.0.4",

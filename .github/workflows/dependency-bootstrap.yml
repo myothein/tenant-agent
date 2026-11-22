@@ -73,3 +73,104 @@ jobs:
         run: npm run test:sqlite
       - name: Verify CLI entrypoint without starting service
         run: node dist/index.js --help
+
+
+  full-sync-e2e:
+    needs: lockfile-bootstrap
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUN_FULL_SYNC_E2E: '1'
+      TENANT_ID: tenant_ci_qa
+      TENANT_DATABASE_URL_TEMPLATE: 'postgresql://ci_qa:ci_only_password@127.0.0.1:5432/{tenant}'
+      SYSTEM_DATABASE_URL: 'postgresql://ci_qa:ci_only_password@127.0.0.1:5432/central_ci_qa'
+      TENANT_ADMIN_API_KEY: ci-only-admin-credential-longer-than-32-bytes
+      TENANT_AGENT_API_KEY: ci-only-agent-credential-longer-than-32-bytes
+      CENTRAL_AGENT_API_KEY: ci-only-central-agent-credential-longer-than-32-bytes
+      CENTRAL_AGENT_KEYS_JSON: '{"tenant_ci_qa":"ci-only-central-agent-credential-longer-than-32-bytes"}'
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci_qa
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: tenant_ci_qa
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_qa -d tenant_ci_qa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout tenant-agent draft branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+      - name: Checkout exact audited tenant-service revision
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/tenant-service
+          ref: f1359cabccbd79cf7a683879a11246b241bd21b1
+          path: integration/tenant-service
+          persist-credentials: false
+      - name: Checkout exact audited central-service revision
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/central-service
+          ref: 26f068b862487cc9538d8a872381fac7ef82efe5
+          path: integration/central-service
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install and build both backend services
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd integration/tenant-service && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
+          (cd integration/central-service && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
+      - name: Build agent with native SQLite binding
+        shell: bash
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Retrieve pinned db-helper migrations (no real environment secrets)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ums-integration-migrations
+          URL=https://raw.githubusercontent.com/myothein/db-helper/bfae1246e28a43626e00627b9b812af579af4ab3
+          curl -fsSL --retry 3 "$URL/prisma/system/migrations/001_init_system_db/migration.sql" -o /tmp/ums-integration-migrations/system.sql
+          curl -fsSL --retry 3 "$URL/prisma/tenant/migrations/20260106105615_001_tenant_init/migration.sql" -o /tmp/ums-integration-migrations/tenant.sql
+          curl -fsSL --retry 3 "$URL/prisma/tenant/migrations/20260107_add_local_events/migration.sql" -o /tmp/ums-integration-migrations/local_events.sql
+      - name: Create isolated central and tenant PostgreSQL databases and apply migrations
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { Client } = require('./integration/tenant-service/node_modules/pg');
+          (async () => {
+            const tenantUrl = process.env.TENANT_DATABASE_URL_TEMPLATE.replace('{tenant}',process.env.TENANT_ID);
+            const admin = new Client({connectionString:tenantUrl});
+            await admin.connect();
+            try { await admin.query('CREATE DATABASE central_ci_qa'); }
+            finally { await admin.end(); }
+            for (const [url,files] of [
+              [tenantUrl,['tenant.sql','local_events.sql']],
+              [process.env.SYSTEM_DATABASE_URL,['system.sql']]
+            ]) {
+              const db = new Client({connectionString:url});
+              await db.connect();
+              try {
+                for (const filename of files) {
+                  await db.query(fs.readFileSync('/tmp/ums-integration-migrations/'+filename,'utf8'));
+                }
+              } finally {await db.end();}
+            }
+          })().catch(error=>{console.error('Isolated E2E migration failed:',error.name);process.exitCode=1;});
+          NODE
+      - name: Verify HTTP to PostgreSQL to SQLite to Central event delivery
+        run: npm run test:e2e
