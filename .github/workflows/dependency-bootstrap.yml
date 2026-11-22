@@ -51,3 +51,25 @@ jobs:
         run: npm run build
       - name: Event sync contract unit tests
         run: npm test
+
+  windows-native-sqlite:
+    needs: lockfile-bootstrap
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install native SQLite binding and locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Compile agent
+        run: npm run build
+      - name: Windows SQLite durability, dedupe and backup tests
+        run: npm run test:sqlite
+      - name: Verify CLI entrypoint without starting service
+        run: node dist/index.js --help

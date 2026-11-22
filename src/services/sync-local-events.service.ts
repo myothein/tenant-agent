@@ -66,6 +66,9 @@ export class LocalEventsSyncService {
         `).run();
     }
 
+    /** Release the SQLite connection for clean shutdown and deterministic QA. */
+    close() { this.outboxDb.close(); }
+
     /* ============================
        Helpers
     ============================ */

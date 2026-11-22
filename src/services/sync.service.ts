@@ -1,5 +1,6 @@
 // packages/tenant-agent/src/services/sync.service.ts
 import Database from "better-sqlite3";
+import fs from "node:fs";
 import { v4 as uuid } from "uuid";
 import { config } from "../config/tenant-agent.config.js";
 import { systemApi } from "../system-api/client.js";
@@ -27,7 +28,8 @@ export class SyncService {
     private MAX_RETRY = 5;
 
     constructor() {
-        // Open or create SQLite DB
+        // Create a local directory before opening the durable outbox.
+        fs.mkdirSync("data", { recursive: true });
         this.db = new Database("data/outbox.db");
 
         // Create table if it does not exist
@@ -201,6 +203,11 @@ export class SyncService {
         if (result.changes > 0) {
             Logger.info(`[Clean] Removed ${result.changes} old sent events older than ${cutoff}`);
         }
+    }
+
+    /** WAL-aware consistent backup of live SQLite data; never copy the opened db file directly. */
+    async backupTo(destination: string): Promise<void> {
+        await this.db.backup(destination);
     }
 
     /**

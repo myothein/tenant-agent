@@ -3,25 +3,21 @@ import { config } from "./config/tenant-agent.config.js";
 import { SyncService } from "./services/sync.service.js";
 import fs from "fs-extra";
 import path from "path";
-import { exec } from "child_process";
+
 
 export async function startAgent() {
     console.log("Tenant Agent starting...");
 
-    const syncService = new SyncService();
-    const dbPath = path.resolve("data/outbox.db");
-
-    // Auto-clean DB
     if (config.autoCleanDb) {
-        try {
-            syncService.close();
-            await fs.remove(dbPath);
-            await fs.ensureDir(path.dirname(dbPath));
-            console.log("[AutoCleanDB] Outbox database cleaned.");
-        } catch (err: unknown) {
-            console.error("[AutoCleanDB] Failed:", err instanceof Error ? err.message : err);
-        }
+        throw new Error('Automatic outbox deletion is disabled; use verified backup and approved maintenance');
     }
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(config.tenantId)) {
+        throw new Error('Valid TENANT_ID is required to start the agent');
+    }
+    if (!process.env.SYSTEM_API_URL || !process.env.TENANT_API_URL) {
+        throw new Error('SYSTEM_API_URL and TENANT_API_URL must be explicitly configured');
+    }
+    const syncService = new SyncService();
 
     // Heartbeat
     const sendHeartbeat = async () => {
@@ -46,7 +42,7 @@ export async function startAgent() {
             await fs.ensureDir(backupDir);
 
             const backupFile = path.join(backupDir, `outbox-backup-${timestamp}.db`);
-            await fs.copy(dbPath, backupFile);
+            await syncService.backupTo(backupFile);
 
             console.log(`[Backup] Created: ${backupFile}`);
         } catch (err: unknown) {
@@ -58,21 +54,9 @@ export async function startAgent() {
     // Cleanup old events
     const cleanupInterval = setInterval(() => syncService.cleanOldEvents(config.eventRetentionMs), 1000 * 60 * 60);
 
-    // Run migrations at startup
-    const runMigrations = () => {
-        try {
-            const schemaPath = path.resolve("packages/db-helper/prisma/tenant.prisma");
-            const migrateCmd = `npx prisma migrate deploy --schema=${schemaPath}`;
-            exec(migrateCmd, (error, stdout, stderr) => {
-                if (error) console.error("[Migrate] Error:", error.message);
-                if (stderr) console.error("[Migrate] Stderr:", stderr);
-                if (stdout) console.log("[Migrate] Success:\n", stdout);
-            });
-        } catch (err: unknown) {
-            console.error("[Migrate] Failed:", err instanceof Error ? err.message : err);
-        }
-    };
-    runMigrations();
+    // Never run database migrations implicitly from a long-running Windows agent.
+    // db-helper migrations require an explicit, backed-up operator-controlled step.
+    console.log('[Migrate] Automatic startup migrations disabled; run verified migrations separately.');
 
     // Graceful shutdown
     const shutdown = () => {

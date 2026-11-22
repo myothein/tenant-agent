@@ -1,5 +1,5 @@
 export const config = {
-    tenantId: process.env.TENANT_ID || "962c6be3-6402-47a6-b590-a8f6722257d7",
+    tenantId: process.env.TENANT_ID || "",
     systemApiUrl: process.env.SYSTEM_API_URL || "http://localhost:5000",
     tenantServiceUrl: process.env.TENANT_API_URL || "http://localhost:3000",
     heartbeatIntervalMs: 30_000, // every 30 seconds
