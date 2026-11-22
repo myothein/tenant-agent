@@ -129,3 +129,57 @@ test('Windows SQLite: central 501 leaves event queued; matching 201 acknowledgme
         rmSync(directory, { recursive: true, force: true });
     }
 });
+
+
+test('Windows SQLite: canonical sync scheduler avoids overlaps and shuts down cleanly', async () => {
+    const originalDirectory=process.cwd();
+    const directory=mkdtempSync(path.join(tmpdir(),'agent-scheduler-ci-'));
+    let local:LocalEventsSyncService | undefined;
+    try {
+        process.chdir(directory);
+        local=new LocalEventsSyncService('tenant_ci_qa');
+        let active=0;
+        let maxActive=0;
+        let pollCount=0;
+        local.pollLocalEvents=async()=>{
+            active++;
+            maxActive=Math.max(active,maxActive);
+            await new Promise<void>(resolve=>setTimeout(resolve,60));
+            active--;
+            pollCount++;
+            return 0;
+        };
+        local.flushOutbox=async()=>{
+            active++;
+            maxActive=Math.max(active,maxActive);
+            await new Promise<void>(resolve=>setTimeout(resolve,20));
+            active--;
+            return 0;
+        };
+        local.start(25);
+        await new Promise<void>(resolve=>setTimeout(resolve,250));
+        await local.stop();
+        assert.ok(pollCount>=2,'Scheduler should run repeatedly');
+        assert.equal(maxActive,1,'Only one poll/flush may be active');
+        const stoppedCount=pollCount;
+        await new Promise<void>(resolve=>setTimeout(resolve,70));
+        assert.equal(pollCount,stoppedCount,'No timer may run after stop');
+        assert.equal(local.cleanSentEvents(0),0);
+        const snapshot=path.join(directory,'scheduler-snapshot.db');
+        await local.backupTo(snapshot);
+        const restored=new Database(snapshot,{readonly:true});
+        try {
+            const result=restored.prepare('SELECT count(*) AS n FROM outbox').get() as {n:number};
+            assert.equal(result.n,0);
+        } finally {restored.close();}
+        local.close();
+        local=undefined;
+    } finally {
+        if(local){
+            await local.stop();
+            local.close();
+        }
+        process.chdir(originalDirectory);
+        rmSync(directory,{recursive:true,force:true});
+    }
+});
