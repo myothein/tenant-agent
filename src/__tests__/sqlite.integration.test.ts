@@ -25,6 +25,11 @@ test('Windows SQLite: preserves event identity, deduplicates, backs up live outb
         };
         local.addToOutbox(event);
         local.addToOutbox(event);
+        assert.throws(
+            () => local!.addToOutbox({ ...event, payload: {name:'Altered-Event-Body'} }),
+            /Local outbox event ID collision/,
+            'Same ID with different content must not silently acknowledge source'
+        );
         const live = new Database(path.join(directory, 'data', 'outbox.db'), { readonly: true });
         try {
             const count = live.prepare('SELECT COUNT(*) AS n FROM outbox WHERE id=?').get(id) as { n: number };
