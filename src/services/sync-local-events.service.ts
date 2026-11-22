@@ -182,6 +182,19 @@ export class LocalEventsSyncService {
 
         stmt.run(values);
 
+        // INSERT OR IGNORE is safe only for a genuine replay of the SAME event.
+        // Never silently acknowledge a source record with a reused ID and altered payload.
+        const persisted = this.outboxDb.prepare(
+            'SELECT tenantId,agentId,aggregate_type,aggregate_id,event_type,' +
+            'payload,createdAt,occurredAt,event_version,headers FROM outbox WHERE id=?'
+        ).get(record.id) as Record<string, unknown> | undefined;
+        if (!persisted || [
+            'tenantId','agentId','aggregate_type','aggregate_id','event_type',
+            'payload','createdAt','occurredAt','event_version','headers'
+        ].some(key => persisted[key] !== (record as unknown as Record<string,unknown>)[key])) {
+            throw new Error('Local outbox event ID collision; source event not acknowledged');
+        }
+
         Logger.info(
             `[Tenant-Agent] Local event queued: ${event.event_type}`
         );
