@@ -1,74 +1,98 @@
-import { systemApi } from "./system-api/client.js";
-import { config } from "./config/tenant-agent.config.js";
-import { SyncService } from "./services/sync.service.js";
-import fs from "fs-extra";
-import path from "path";
+import { systemApi } from './system-api/client.js';
+import { config } from './config/tenant-agent.config.js';
+import { LocalEventsSyncService } from './services/sync-local-events.service.js';
+import fs from 'fs-extra';
+import path from 'node:path';
 
+function validateEndpoint(value: string, label: string) {
+    let url: URL;
+    try { url = new URL(value); }
+    catch { throw new Error(label + ' must be a valid HTTP(S) URL'); }
+    if (url.username || url.password ||
+        !['https:', 'http:'].includes(url.protocol) ||
+        (url.protocol === 'http:' &&
+         !['localhost','127.0.0.1','[::1]','::1'].includes(url.hostname))) {
+        throw new Error(label + ' requires HTTPS outside localhost, without embedded credentials');
+    }
+}
 
-export async function startAgent() {
-    console.log("Tenant Agent starting...");
-
+export async function startAgent(): Promise<void> {
     if (config.autoCleanDb) {
-        throw new Error('Automatic outbox deletion is disabled; use verified backup and approved maintenance');
+        throw new Error('Automatic outbox deletion is disabled');
     }
     if (!/^[A-Za-z0-9_-]{1,64}$/.test(config.tenantId)) {
-        throw new Error('Valid TENANT_ID is required to start the agent');
+        throw new Error('Valid TENANT_ID is required');
     }
     if (!process.env.SYSTEM_API_URL || !process.env.TENANT_API_URL) {
-        throw new Error('SYSTEM_API_URL and TENANT_API_URL must be explicitly configured');
+        throw new Error('SYSTEM_API_URL and TENANT_API_URL must be configured');
     }
-    const syncService = new SyncService();
-
-    // Heartbeat
-    const sendHeartbeat = async () => {
-        try {
-            await systemApi.sendHeartbeat({ tenantId: config.tenantId, sentAt: Date.now() });
-            console.log(`[Heartbeat] Success`);
-        } catch (err: any) {
-            console.error(`[Heartbeat] Failed: ${err.message}`);
+    validateEndpoint(process.env.SYSTEM_API_URL,'SYSTEM_API_URL');
+    validateEndpoint(process.env.TENANT_API_URL,'TENANT_API_URL');
+    for (const name of ['TENANT_AGENT_API_KEY','CENTRAL_AGENT_API_KEY']) {
+        const value=process.env[name];
+        if (!value || Buffer.byteLength(value,'utf8')<32) {
+            throw new Error(name + ' must be configured');
         }
-    };
-    sendHeartbeat();
-    const heartbeatInterval = setInterval(sendHeartbeat, config.heartbeatIntervalMs);
+    }
 
-    // Outbox sync
+    // One canonical agent loop owns polling + durable SQLite + central delivery.
+    // Do not launch the separate legacy SyncService loop in parallel.
+    const syncService=new LocalEventsSyncService(config.tenantId,config.tenantServiceUrl);
     syncService.start(config.syncIntervalMs);
 
-    // Automatic backup
-    const backupOutbox = async () => {
+    const heartbeat = async () => {
         try {
-            const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-            const backupDir = path.resolve("backups");
-            await fs.ensureDir(backupDir);
-
-            const backupFile = path.join(backupDir, `outbox-backup-${timestamp}.db`);
-            await syncService.backupTo(backupFile);
-
-            console.log(`[Backup] Created: ${backupFile}`);
-        } catch (err: unknown) {
-            console.error("[Backup] Failed:", err instanceof Error ? err.message : err);
+            await systemApi.sendHeartbeat({tenantId:config.tenantId,sentAt:Date.now()});
+        } catch {
+            console.error('[Heartbeat] Central heartbeat unavailable; local events remain queued');
         }
     };
-    const backupInterval = setInterval(backupOutbox, 1000 * 60 * 60);
+    void heartbeat();
+    const heartbeatTimer=setInterval(()=>void heartbeat(),config.heartbeatIntervalMs);
 
-    // Cleanup old events
-    const cleanupInterval = setInterval(() => syncService.cleanOldEvents(config.eventRetentionMs), 1000 * 60 * 60);
-
-    // Never run database migrations implicitly from a long-running Windows agent.
-    // db-helper migrations require an explicit, backed-up operator-controlled step.
-    console.log('[Migrate] Automatic startup migrations disabled; run verified migrations separately.');
-
-    // Graceful shutdown
-    const shutdown = () => {
-        console.log("Tenant Agent stopping...");
-        clearInterval(heartbeatInterval);
-        clearInterval(backupInterval);
-        clearInterval(cleanupInterval);
-        syncService.close();
-        process.exit(0);
+    let backupJob:Promise<boolean> | null=null;
+    const backupOutbox=():Promise<boolean> => {
+        if (backupJob) return backupJob;
+        backupJob=(async()=>{
+            try {
+                const directory=path.resolve('backups');
+                await fs.ensureDir(directory);
+                const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+                await syncService.backupTo(path.join(directory,'outbox-backup-'+stamp+'.db'));
+                return true;
+            } catch {
+                console.error('[Backup] SQLite snapshot failed');
+                return false;
+            }
+        })().finally(()=>{backupJob=null;});
+        return backupJob;
     };
-    process.on("SIGTERM", shutdown);
-    process.on("SIGINT", shutdown);
+    const backupTimer=setInterval(()=>void backupOutbox(),60*60*1000);
+    const cleanupTimer=setInterval(()=>{
+        try {syncService.cleanSentEvents(config.eventRetentionMs);}
+        catch {console.error('[Cleanup] Failed to prune acknowledged events');}
+    },60*60*1000);
 
-    console.log("Tenant Agent is running.");
+    // Migrations are never applied automatically during Windows service startup.
+    console.log('[Tenant-Agent] Poll, durable outbox, central delivery and heartbeat active');
+    let shuttingDown=false;
+    const shutdown=async()=>{
+        if (shuttingDown) return;
+        shuttingDown=true;
+        clearInterval(heartbeatTimer);
+        clearInterval(backupTimer);
+        clearInterval(cleanupTimer);
+        let status=0;
+        try {
+            await syncService.stop(); // wait for any active poll/flush before closing SQLite
+            if (!(await backupOutbox())) status=1;
+            syncService.close();
+        } catch {
+            console.error('[Tenant-Agent] Graceful shutdown failed');
+            status=1;
+        }
+        process.exit(status);
+    };
+    process.once('SIGTERM',()=>void shutdown());
+    process.once('SIGINT',()=>void shutdown());
 }
