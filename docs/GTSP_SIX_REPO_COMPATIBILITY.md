@@ -11,7 +11,7 @@
 | central-service | `d423d9fee7f3d382be8072f85cd98fc64be087e3` | https://github.com/myothein/central-service/actions/runs/45089375818 |
 | tenant-service | `db138df1f65d3b39646106c884409129ec8f5f6d` | https://github.com/myothein/tenant-service/actions/runs/45088141628 |
 | db-helper | `cd99b4508ba4674110484527525ad9b172618b4a` | https://github.com/myothein/db-helper/actions/runs/45092347091 |
-| tenant-agent | `be22c133dc3ca53c3be9c2ed60e7cc8f933dd737` (four-component runtime E2E code checkpoint; subsequent changes here are documentation-only) | https://github.com/myothein/tenant-agent/actions/runs/45094317774 |
+| tenant-agent | `680c1e320ecf22df21aa23630d86bac0e780bac3` (latest four-component runtime E2E code checkpoint; subsequent documentation edits only) | https://github.com/myothein/tenant-agent/actions/runs/45094625388 |
 | agentctl | `cf3b3c2ff733824f8c99438b9ff02063d3e6fb1d` | https://github.com/myothein/agentctl/actions/runs/45091030970 |
 | central-cli | `e3c78a06991c9c64c39a5d57f7297605aa37a3f9` | https://github.com/myothein/central-cli/actions/runs/45089801483 |
 
@@ -24,6 +24,7 @@ All revisions above are immutable commit identifiers, not moving branch tags. Th
 | tenant-service Subject POST -> PostgreSQL local_events -> tenant-agent native SQLite -> central-service PostgreSQL event receipt | PASS, ephemeral PostgreSQL 17 and native SQLite | tenant-agent latest E2E run |
 | Original UUID retry and central duplicate event idempotence; offline/missing-key recovery | PASS, synthetic scenarios | tenant-agent latest E2E run |
 | Wrong tenant Central agent credential, agent-as-admin credential reuse and tenant-header spoofing | DENIED as expected, synthetic scenarios | tenant-agent latest E2E run |
+| Existing Central event UUID replayed with mutated contents | HTTP 409; original persisted PostgreSQL payload unchanged | tenant-agent latest E2E run |
 | Versioned db-helper system/tenant/local-event migrations applied into fresh isolated PostgreSQL databases | PASS as part of E2E; three migration files pinned to db-helper revision | tenant-agent latest E2E run |
 | central-cli signed RS256 JWT against OIDC-hardened central-service and disposable PostgreSQL 17 | PASS with local mock JWKS / synthetic token, NOT real Keycloak | central-cli own CI run |
 | agentctl signed artifact verification, simulated rollback and disposable Windows NSSM/SCM start/stop/rollback | PASS on hosted Windows QA, NOT production Windows server | agentctl own CI run |
