@@ -87,7 +87,8 @@ jobs:
           cd integration/agentctl
           npm ci --ignore-scripts --no-audit --no-fund
           npm test
-
+      - name: Windows installer compatibility gate
+        run: node scripts/qa/windows-agentctl-interop.cjs
 
   full-sync-e2e:
     needs: lockfile-bootstrap
