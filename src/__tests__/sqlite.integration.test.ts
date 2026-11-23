@@ -614,6 +614,30 @@ test('Windows SQLite: verified backup atomically refuses overwrite and rejects c
         manual.close();
         manual = undefined;
 
+        // Restore to a NEW disposable directory, never overwrite the live DB.
+        // Reopening via the actual agent service verifies operational replay,
+        // not only that a read-only SQLite inspector can open the backup.
+        const restoreRoot = path.join(workspace, 'isolated-restore');
+        fs.mkdirSync(path.join(restoreRoot, 'data'), { recursive: true });
+        fs.copyFileSync(destination, path.join(restoreRoot, 'data', 'outbox.db'));
+        process.chdir(restoreRoot);
+        canonical = new LocalEventsSyncService('tenant_ci_qa');
+        canonical.addToOutbox({
+            id, tenant_code: 'tenant_ci_qa', agent_id: 'tenant-service',
+            aggregate_type: 'Subject', aggregate_id: '73',
+            event_type: 'subject.created', payload: { id: 73, name: 'Synthetic Only' },
+            created_at: '2020-01-01T00:00:00.000Z',
+            occurred_at: '2020-01-01T00:00:00.000Z'
+        });
+        const replayed = (canonical as unknown as { outboxDb: Database.Database })
+            .outboxDb.prepare('SELECT id,sent,status FROM outbox WHERE id=?')
+            .all(id) as Array<{ id:string;sent:number;status:string }>;
+        assert.deepEqual(replayed, [{id,sent:0,status:'pending'}],
+            'Restored event remains exactly one pending record after source retry');
+        canonical.close();
+        canonical = undefined;
+        process.chdir(workspace);
+
         // A corrupt file or arbitrary bytes must never pass SQLite verification.
         const corrupt = path.join(workspace, 'synthetic-corrupt-file.db');
         fs.writeFileSync(corrupt, Buffer.from('not a valid SQLite database'));
