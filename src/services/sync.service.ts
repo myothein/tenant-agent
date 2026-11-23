@@ -1,9 +1,11 @@
 // packages/tenant-agent/src/services/sync.service.ts
 import Database from "better-sqlite3";
+import fs from "node:fs";
 import { v4 as uuid } from "uuid";
 import { config } from "../config/tenant-agent.config.js";
 import { systemApi } from "../system-api/client.js";
 import { Logger } from "../utils/logger.js";
+import { createVerifiedOutboxBackup } from './sqlite-verified-backup.js';
 
 export interface OutboxEvent {
     id?: string;
@@ -27,8 +29,21 @@ export class SyncService {
     private MAX_RETRY = 5;
 
     constructor() {
-        // Open or create SQLite DB
+        // Create a local directory before opening the durable outbox.
+        fs.mkdirSync("data", { recursive: true });
         this.db = new Database("data/outbox.db");
+
+        // The manual CLI shares the durable outbox with the canonical agent.
+        // Apply the same per-connection FULL-synchronous WAL policy; reject
+        // filesystems that cannot meet the expected persistence guarantees.
+        const journal = this.db.pragma('journal_mode = WAL', { simple: true });
+        this.db.pragma('synchronous = FULL');
+        this.db.pragma('busy_timeout = 5000');
+        if (String(journal).toLowerCase() !== 'wal' ||
+            this.db.pragma('synchronous', { simple: true }) !== 2) {
+            this.db.close();
+            throw new Error('Durable SQLite outbox mode is unavailable');
+        }
 
         // Create table if it does not exist
         this.db.prepare(`
@@ -92,24 +107,47 @@ export class SyncService {
      * Flush unsent events to central system
      */
     async flushOutbox(batchSize = 5): Promise<number> {
-        const unsent: any[] = this.db
-            .prepare("SELECT * FROM outbox WHERE sent = 0")
-            .all()
-            .map((row: any) => ({
-                ...row,
-                payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
-            }));
-
-        if (!unsent.length) return 0;
-
-        Logger.info(`[Sync] Flushing ${unsent.length} event(s) to system API in batches of ${batchSize}...`);
+        if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+            throw new Error('Invalid outbox batch size');
+        }
+        // The manual CLI uses the same bounded, stable SQLite snapshot rule
+        // as the daemon: scan a finite high-water mark, not an unbounded .all().
+        const highWater = this.db.prepare(
+            'SELECT MAX(rowid) AS lastRowId FROM outbox WHERE sent=0'
+        ).get() as { lastRowId: number | null };
+        if (highWater.lastRowId === null) return 0;
+        const page = this.db.prepare(
+            'SELECT rowid AS scanRowId, * FROM outbox ' +
+            'WHERE sent=0 AND rowid>? AND rowid<=? ORDER BY rowid ASC LIMIT ?'
+        );
+        let cursor = 0;
         let flushedCount = 0;
 
-        for (let i = 0; i < unsent.length; i += batchSize) {
-            const batch = unsent.slice(i, i + batchSize);
-
+        while (cursor < highWater.lastRowId) {
+            const batch = page.all(cursor, highWater.lastRowId, batchSize) as
+                Array<{ scanRowId: number; id: string; tenantId: string; agentId: string;
+                    aggregate_type: string; aggregate_id: string; event_type: string;
+                    payload: string; createdAt: string; occurredAt: string;
+                    retry_count: number }>;
+            if (batch.length === 0) break;
+            cursor = batch[batch.length - 1].scanRowId;
             const results = await Promise.allSettled(
-                batch.map(async (event) => {
+                batch.map(async row => {
+                    let parsed: unknown;
+                    try { parsed = JSON.parse(row.payload); }
+                    catch {
+                        // Preserve a corrupt source event for authorized recovery.
+                        // Never print the event payload or the JSON parser error.
+                        Logger.error('[Sync] Invalid SQLite event JSON; record retained for review');
+                        return false;
+                    }
+                    const event = { ...row, payload: parsed };
+
+                    if (!process.env.TENANT_ID ||
+                        event.tenantId !== process.env.TENANT_ID) {
+                        Logger.error('[Sync] Cross-tenant outbox event blocked before network delivery');
+                        return false;
+                    }
                     if (!event.tenantId || !event.event_type || !event.payload) {
                         Logger.warn(`[Sync] Skipping event ${event.id} — missing required fields`);
                         return false;
@@ -126,11 +164,9 @@ export class SyncService {
                         tenantId: event.tenantId,
                         agentId: event.agentId ?? "agent-1",
                         event_type: event.event_type,
-                        payload: {
-                            ...event.payload,
-                            aggregate_type: event.aggregate_type,
-                            aggregate_id: event.aggregate_id,
-                        },
+                        aggregate_type: event.aggregate_type,
+                        aggregate_id: event.aggregate_id,
+                        payload: event.payload,
                         createdAt: new Date(event.createdAt).toISOString(),
                         occurredAt: new Date(event.occurredAt).toISOString(),
                     };
@@ -141,8 +177,9 @@ export class SyncService {
                         this.db.prepare("UPDATE outbox SET sent=1, status='sent' WHERE id=?").run(event.id);
                         Logger.info(`[Sync] Event ${event.id} sent successfully`);
                         return true;
-                    } catch (err: any) {
-                        Logger.error(`[Sync] Failed to send event ${event.id}: ${err.message}`);
+                    } catch {
+                        // Network errors can contain private headers and event URLs.
+                        Logger.error('[Sync] Central event delivery failed; event remains queued');
 
                         this.db.prepare(`
               UPDATE outbox
@@ -201,6 +238,11 @@ export class SyncService {
         if (result.changes > 0) {
             Logger.info(`[Clean] Removed ${result.changes} old sent events older than ${cutoff}`);
         }
+    }
+
+    /** Stage, validate, and atomically publish a native SQLite backup. */
+    async backupTo(destination: string): Promise<void> {
+        await createVerifiedOutboxBackup(this.db, destination);
     }
 
     /**

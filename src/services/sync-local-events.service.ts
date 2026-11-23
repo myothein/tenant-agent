@@ -1,10 +1,11 @@
 import Database from "better-sqlite3";
 import axios from "axios";
-import { v4 as uuid } from "uuid";
+import fs from "node:fs";
 import { config } from "../config/tenant-agent.config.js";
 import { Logger } from "../utils/logger.js";
-import { randomUUID } from "crypto";
+import { tenantAgentAuthHeaders, toOutboxRecord } from "./event-sync-contract.js";
 import { systemApi } from "../system-api/client.js"; // adjust path
+import { createVerifiedOutboxBackup } from './sqlite-verified-backup.js';
 
 /* ============================
    Types
@@ -35,15 +36,30 @@ export class LocalEventsSyncService {
     private outboxDb: Database.Database;
     private tenantServiceUrl: string;
     private tenantId: string;
+    private syncTimer: NodeJS.Timeout | null = null;
+    private inFlight: Promise<void> | null = null;
 
     constructor(
         tenantId: string,
-        tenantServiceUrl: string = "http://localhost:3000"
+        tenantServiceUrl: string = config.tenantServiceUrl
     ) {
         this.tenantId = tenantId;
         this.tenantServiceUrl = tenantServiceUrl;
 
+        fs.mkdirSync("data", { recursive: true });
         this.outboxDb = new Database("data/outbox.db");
+
+        // A source event is acknowledged only after the SQLite insert commits.
+        // Require crash-recoverable WAL and a FULL-sync commit boundary; abort
+        // startup rather than silently accepting weaker durability settings.
+        const journal = this.outboxDb.pragma('journal_mode = WAL', { simple: true });
+        this.outboxDb.pragma('synchronous = FULL');
+        this.outboxDb.pragma('busy_timeout = 5000');
+        if (String(journal).toLowerCase() !== 'wal' ||
+            this.outboxDb.pragma('synchronous', { simple: true }) !== 2) {
+            this.outboxDb.close();
+            throw new Error('Durable SQLite outbox mode is unavailable');
+        }
 
         this.outboxDb.prepare(`
             CREATE TABLE IF NOT EXISTS outbox (
@@ -65,6 +81,30 @@ export class LocalEventsSyncService {
         `).run();
     }
 
+    /** Stop timers and drain in-flight events before closing the durable outbox. */
+    close() {
+        if (this.syncTimer || this.inFlight) {
+            throw new Error('Stop sync operations before closing the SQLite outbox');
+        }
+        this.outboxDb.close();
+    }
+
+    /** Stage, validate, and atomically publish a native SQLite backup. */
+    async backupTo(destination: string): Promise<void> {
+        await createVerifiedOutboxBackup(this.outboxDb, destination);
+    }
+
+    /** Never delete an event that has not been acknowledged by the central server. */
+    cleanSentEvents(retentionMs: number): number {
+        if (!Number.isSafeInteger(retentionMs) || retentionMs < 0) {
+            throw new Error('Invalid event retention');
+        }
+        const cutoff = new Date(Date.now() - retentionMs).toISOString();
+        return this.outboxDb.prepare(
+            'DELETE FROM outbox WHERE sent=1 AND createdAt < ?'
+        ).run(cutoff).changes;
+    }
+
     /* ============================
        Helpers
     ============================ */
@@ -83,17 +123,18 @@ export class LocalEventsSyncService {
     async fetchPendingEvents(): Promise<LocalEvent[]> {
         try {
             const res = await axios.get(
-                `${this.tenantServiceUrl}/local-events/pending`
+                `${this.tenantServiceUrl}/local-events/pending`,
+                { headers: tenantAgentAuthHeaders(), timeout: 10_000 }
             );
-
-            return Array.isArray(res.data?.data)
-                ? res.data.data
-                : [];
+            if (!Array.isArray(res.data?.data)) {
+                throw new Error('Invalid pending events response');
+            }
+            return res.data.data as LocalEvent[];
         } catch (err: any) {
             Logger.error(
                 `[Tenant-Agent] Failed to fetch local_events: ${err.message}`
             );
-            return [];
+            throw err;
         }
     }
 
@@ -119,7 +160,9 @@ export class LocalEventsSyncService {
 
             try {
                 await axios.patch(
-                    `${this.tenantServiceUrl}/local-events/${event.id}/mark-sent`
+                    `${this.tenantServiceUrl}/local-events/${event.id}/mark-sent`,
+                    null,
+                    { headers: tenantAgentAuthHeaders(), timeout: 10_000 }
                 );
                 Logger.info(`[Tenant-Agent] Marked sent: ${event.id}`);
             } catch (err: any) {
@@ -140,8 +183,9 @@ export class LocalEventsSyncService {
 
 
     addToOutbox(event: LocalEvent) {
+        const record = toOutboxRecord(event, this.tenantId);
         const stmt = this.outboxDb.prepare(`
-        INSERT INTO outbox (
+        INSERT OR IGNORE INTO outbox (
             id,
             tenantId,
             agentId,
@@ -160,29 +204,33 @@ export class LocalEventsSyncService {
     `);
 
         const values = [
-            randomUUID(),                           // id
-            this.tenantId,                          // tenantId
-            event.agent_id ?? "tenant-agent",       // agentId
-            event.aggregate_type,                   // aggregate_type
-            event.aggregate_id,                     // aggregate_id
-            event.event_type,                       // event_type
-            JSON.stringify(event.payload ?? {}),    // payload
-            event.created_at ?? new Date().toISOString(), // createdAt
-            event.occurred_at ?? new Date().toISOString(), // occurredAt
-            0,                                      // sent
-            "pending",                              // status
-            event.retry_count ?? 0,                 // retry_count
-            event.event_version ?? 1,               // event_version
-            JSON.stringify(event.headers ?? {})     // headers
+            record.id, record.tenantId, record.agentId,
+            record.aggregate_type, record.aggregate_id, record.event_type,
+            record.payload, record.createdAt, record.occurredAt,
+            0, 'pending', record.retry_count, record.event_version, record.headers
         ];
 
-        // 🔒 Guard rail (debug lifesaver)
+        // Never print the values array: it contains private event payloads
+        // and may contain authentication or student identity metadata.
         if (values.some(v => v === undefined)) {
-            Logger.error("[Outbox] Undefined value detected", values);
-            throw new Error("Undefined value in outbox insert");
+            Logger.error("[Outbox] Source event cannot be persisted (invalid field)");
+            throw new Error("Invalid outbox record; source was not acknowledged");
         }
 
         stmt.run(values);
+
+        // INSERT OR IGNORE is safe only for a genuine replay of the SAME event.
+        // Never silently acknowledge a source record with a reused ID and altered payload.
+        const persisted = this.outboxDb.prepare(
+            'SELECT tenantId,agentId,aggregate_type,aggregate_id,event_type,' +
+            'payload,createdAt,occurredAt,event_version,headers FROM outbox WHERE id=?'
+        ).get(record.id) as Record<string, unknown> | undefined;
+        if (!persisted || [
+            'tenantId','agentId','aggregate_type','aggregate_id','event_type',
+            'payload','createdAt','occurredAt','event_version','headers'
+        ].some(key => persisted[key] !== (record as unknown as Record<string,unknown>)[key])) {
+            throw new Error('Local outbox event ID collision; source event not acknowledged');
+        }
 
         Logger.info(
             `[Tenant-Agent] Local event queued: ${event.event_type}`
@@ -194,26 +242,42 @@ export class LocalEventsSyncService {
     ============================ */
 
     async flushOutbox(batchSize = 5): Promise<number> {
-        const rows = this.outboxDb
-            .prepare(`
-                SELECT *
-                FROM outbox
-                WHERE sent = 0
-                ORDER BY createdAt ASC
-            `)
-            .all();
+        if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+            throw new Error('Invalid outbox batch size');
+        }
+        // A stable rowid high-water mark bounds each flush attempt, even if
+        // new records arrive while the network is slow. No unbounded .all().
+        const highWater = this.outboxDb.prepare(
+            'SELECT MAX(rowid) AS maxRowId FROM outbox WHERE sent = 0'
+        ).get() as { maxRowId: number | null };
+        if (highWater.maxRowId === null) return 0;
 
-        if (rows.length === 0) return 0;
-
-        console.log(`[Sync] Flushing ${rows.length} event(s)...`);
-
+        const page = this.outboxDb.prepare(
+            'SELECT rowid AS outboxRowId, id, tenantId, agentId, aggregate_type, aggregate_id, ' +
+            'event_type, payload, createdAt, occurredAt FROM outbox ' +
+            'WHERE sent = 0 AND rowid > ? AND rowid <= ? ORDER BY rowid ASC LIMIT ?'
+        );
+        let cursor = 0;
         let flushedCount = 0;
 
-        for (let i = 0; i < rows.length; i += batchSize) {
-            const batch = rows.slice(i, i + batchSize);
+        while (cursor < highWater.maxRowId) {
+            const batch = page.all(cursor, highWater.maxRowId, batchSize) as
+                Array<{ outboxRowId: number; id: string; tenantId: string;
+                    agentId: string; aggregate_type: string; aggregate_id: string;
+                    event_type: string; payload: string; createdAt: string;
+                    occurredAt: string }>;
+            if (batch.length === 0) break;
+            cursor = batch[batch.length - 1].outboxRowId;
 
             const results = await Promise.allSettled(
-                batch.map(async (row: any) => {
+                batch.map(async (row) => {
+                    // A foreign-tenant row must stay safely queued for quarantine /
+                    // recovery, never leave the local host under this agent identity.
+                    if (row.tenantId !== this.tenantId ||
+                        process.env.TENANT_ID !== this.tenantId) {
+                        Logger.error('[Sync] Cross-tenant outbox event blocked before network delivery');
+                        return false;
+                    }
                     // ---------- SAFELY PARSE PAYLOAD ----------
                     let payload: Record<string, any> = {};
                     try {
@@ -285,31 +349,37 @@ export class LocalEventsSyncService {
 
 
     /* ============================
-       Start loop (CLI)
+       Controlled background synchronization
     ============================ */
 
-    start(intervalMs = config.syncIntervalMs) {
-        Logger.info(
-            `[Tenant-Agent] Sync loop started for tenant ${this.tenantId}`
-        );
-
-        const run = async () => {
-            try {
-                const polled = await this.pollLocalEvents();
-                if (polled > 0) {
-                    Logger.info(`[Tenant-Agent] Polled ${polled} local events`);
+    start(intervalMs: number = config.syncIntervalMs): void {
+        if (this.syncTimer) return;
+        if (!Number.isSafeInteger(intervalMs) || intervalMs < 25) {
+            throw new Error('Sync interval must be at least 25 milliseconds');
+        }
+        const tick = () => {
+            if (this.inFlight) return; // prevent concurrent polling or duplicate deliveries
+            this.inFlight = (async () => {
+                try {
+                    await this.pollLocalEvents();
+                } catch (error) {
+                    Logger.error('[Sync] Local polling failed; durable pending events remain queued');
                 }
-
-                const flushed = await this.flushOutbox();
-                if (flushed > 0) {
-                    Logger.info(`[Tenant-Agent] Flushed ${flushed} events`);
+                try {
+                    await this.flushOutbox();
+                } catch (error) {
+                    Logger.error('[Sync] Central flush failed; durable events remain queued');
                 }
-            } catch (err: any) {
-                Logger.error(`[Sync] Error during sync: ${err.message}`);
-            }
+            })().finally(() => { this.inFlight = null; });
         };
+        tick();
+        this.syncTimer = setInterval(tick, intervalMs);
+        Logger.info('[Tenant-Agent] Controlled local-event sync loop started');
+    }
 
-        run();
-        setInterval(run, intervalMs);
+    async stop(): Promise<void> {
+        if (this.syncTimer) clearInterval(this.syncTimer);
+        this.syncTimer = null;
+        if (this.inFlight) await this.inFlight;
     }
 }

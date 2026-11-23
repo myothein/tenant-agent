@@ -1,120 +1,119 @@
-import { loadConfig } from "../config/load-config.js";
-import { getAuthToken } from "../auth/token-store.js";
+import { loadConfig } from '../config/load-config.js';
 
-export interface SystemApiClientOptions {
-    timeoutMs?: number;
+export interface SystemApiClientOptions { timeoutMs?: number; }
+export interface CentralEventEnvelope {
+    id: string;
+    tenantId: string;
+    agentId: string;
+    event_type: string;
+    aggregate_type: string;
+    aggregate_id: string;
+    payload: unknown;
+    createdAt: string;
+    occurredAt: string;
 }
 
-class SystemApiClient {
-    private _baseUrl?: string;
-    private timeoutMs: number;
+/** Only the central origin or the canonical /api/v1 prefix is accepted. */
+export function resolveSystemApiBaseUrl(configured: string): string {
+    let url: URL;
+    try { url = new URL(configured); }
+    catch { throw new Error('Invalid SYSTEM_API_URL'); }
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password ||
+        url.search || url.hash) {
+        throw new Error('Invalid SYSTEM_API_URL');
+    }
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path && path !== '/api/v1') {
+        throw new Error('SYSTEM_API_URL must use the central API origin or /api/v1');
+    }
+    if (url.protocol === 'http:' &&
+        !['localhost','127.0.0.1','[::1]','::1'].includes(url.hostname)) {
+        throw new Error('SYSTEM_API_URL must use HTTPS outside loopback');
+    }
+    return url.origin;
+}
 
+/** An agent process may only forward data for its deployment-pinned tenant. */
+export function assertAgentTenant(tenantId: unknown): void {
+    const configured = process.env.TENANT_ID;
+    if (!configured || !/^[A-Za-z0-9_-]{1,64}$/.test(configured) ||
+        tenantId !== configured) {
+        throw new Error('Cross-tenant Central API operation rejected');
+    }
+}
+
+/**
+ * Scoped client for Central Service. The old on-disk token fallback is deliberately
+ * NOT used for event delivery. Inject CENTRAL_AGENT_API_KEY securely at runtime.
+ */
+export class SystemApiClient {
+    private timeoutMs: number;
     constructor(options: SystemApiClientOptions = {}) {
         this.timeoutMs = options.timeoutMs ?? 5000;
     }
-
-    /* =======================
-       Lazy Base URL Getter
-       ======================= */
     private get baseUrl(): string {
-        if (!this._baseUrl) {
-            const config = loadConfig(); // lazy load
-            this._baseUrl = config.systemApiUrl.replace(/\/$/, "");
-        }
-        return this._baseUrl;
+        return resolveSystemApiBaseUrl(loadConfig().systemApiUrl);
     }
-
-    /* =======================
-       Core HTTP Helper
-       ======================= */
-    private async request(
-        path: string,
-        options: RequestInit = {}
-    ): Promise<Response> {
+    private agentAuthorization(): string {
+        const value = process.env.CENTRAL_AGENT_API_KEY;
+        if (!value || Buffer.byteLength(value, 'utf8') < 32) {
+            throw new Error('CENTRAL_AGENT_API_KEY must be configured');
+        }
+        return 'Bearer ' + value;
+    }
+    private async request(path: string, options: RequestInit = {}, agentAuth = false): Promise<Response> {
+        // Ensure caller-supplied headers can never override the scoped agent
+        // credential after it has been validated.
+        const headers = new Headers(options.headers);
+        headers.set('content-type', 'application/json');
+        if (agentAuth) headers.set('authorization', this.agentAuthorization());
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
-
-        const token = await getAuthToken();
-
         try {
-            const res = await fetch(`${this.baseUrl}${path}`, {
-                ...options,
-                signal: controller.signal,
-                headers: {
-                    "content-type": "application/json",
-                    ...(token ? { authorization: `Bearer ${token.token}` } : {}),
-                    ...(options.headers ?? {}),
-                },
+            const response = await fetch(this.baseUrl + path, {
+                ...options, headers, signal: controller.signal
             });
-
-            if (!res.ok) {
-                const text = await safeReadText(res);
-                throw new Error(`HTTP ${res.status}: ${text || res.statusText}`);
+            if (!response.ok) {
+                // Do not echo server-supplied errors: they may contain private data.
+                throw new Error('Central API returned HTTP ' + response.status);
             }
-
-            return res;
-        } catch (err: any) {
-            if (err.name === "AbortError") {
-                throw new Error("Request timed out");
+            return response;
+        } catch (error) {
+            if (error instanceof Error && error.name === 'AbortError') {
+                throw new Error('Central API request timed out');
             }
-            throw err;
-        } finally {
-            clearTimeout(timeout);
+            throw error;
+        } finally { clearTimeout(timeout); }
+    }
+    async ping(): Promise<void> {
+        const response = await this.request('/health', { method:'GET' });
+        await response.text();
+    }
+    async sendHeartbeat(payload: { tenantId:string; sentAt:number }): Promise<void> {
+        assertAgentTenant(payload.tenantId);
+        // The central endpoint alone decides whether its response is durable.
+        const response = await this.request('/api/v1/heartbeats', {
+            method:'POST', body:JSON.stringify(payload)
+        }, true);
+        await response.text();
+    }
+    async sendEvent(event: CentralEventEnvelope): Promise<void> {
+        assertAgentTenant(event.tenantId);
+        const response = await this.request('/api/v1/events', {
+            method:'POST', body:JSON.stringify(event)
+        }, true);
+        if (response.status !== 200 && response.status !== 201) {
+            throw new Error('Central event delivery did not return a durable acknowledgment');
+        }
+        let confirmation: unknown;
+        try { confirmation = await response.json(); }
+        catch { throw new Error('Invalid central event acknowledgment'); }
+        const body = confirmation as { success?: boolean; eventId?: string; status?: string } | null;
+        if (!body || body.success !== true || body.eventId !== event.id ||
+            !['accepted', 'duplicate'].includes(body.status ?? '')) {
+            throw new Error('Central event acknowledgment did not match event identity');
         }
     }
-
-    /* =======================
-       Public API
-       ======================= */
-
-    /**
-     * Used by `doctor` to verify connectivity.
-     */
-    async ping(): Promise<void> {
-        await this.request("/health", { method: "GET" });
-    }
-
-    /**
-     * Send a heartbeat to the system.
-     */
-    async sendHeartbeat(payload: { tenantId: string; sentAt: number }): Promise<void> {
-        await this.request("/tenant/heartbeat", {
-            method: "POST",
-            body: JSON.stringify(payload),
-        });
-    }
-
-    /**
-     * Send a single outbox event.
-     */
-    async sendEvent(event: {
-        id: string;
-        tenantId: string;
-        agentId: string;
-        event_type: string;
-        payload: unknown;
-        createdAt: string;
-        occurredAt: string;
-    }): Promise<void> {
-        await this.request("/tenant/events", {
-            method: "POST",
-            body: JSON.stringify(event),
-        });
-    }
 }
 
-/* =======================
-   Singleton
-   ======================= */
 export const systemApi = new SystemApiClient();
-
-/* =======================
-   Utilities
-   ======================= */
-async function safeReadText(res: Response): Promise<string> {
-    try {
-        return await res.text();
-    } catch {
-        return "";
-    }
-}

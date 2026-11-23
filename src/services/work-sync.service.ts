@@ -132,11 +132,9 @@ export class SyncService {
                         tenantId: event.tenantId,              // <-- must exist in outbox
                         agentId: event.agentId || "agent-1",
                         event_type: event.type || event.event_type,
-                        payload: {
-                            ...event.payload,
-                            ...(event.aggregate_type ? { aggregate_type: event.aggregate_type } : {}),
-                            ...(event.aggregate_id ? { aggregate_id: event.aggregate_id } : {})
-                        },
+                        aggregate_type: event.aggregate_type,
+                        aggregate_id: event.aggregate_id,
+                        payload: event.payload,
                         createdAt: event.createdAt ? new Date(event.createdAt).toISOString() : new Date().toISOString(),
                         occurredAt: event.occurredAt ? new Date(event.occurredAt).toISOString() : new Date().toISOString()
                     };

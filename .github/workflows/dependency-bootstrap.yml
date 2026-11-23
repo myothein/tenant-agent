@@ -1,0 +1,218 @@
+name: Dependency bootstrap and build diagnostics
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  lockfile-bootstrap:
+    if: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.head_ref == 'hardening/release-security-baseline-20261122' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out only the proposed branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: true
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Generate npm lock without running dependency scripts
+        run: npm install --package-lock-only --ignore-scripts --no-audit --no-fund
+      - name: Commit generated lockfile to draft branch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add -- package-lock.json
+          if git diff --cached --quiet; then
+            echo 'No lockfile change'
+            exit 0
+          fi
+          git -c user.name='github-actions[bot]' -c user.email='41898282+github-actions[bot]@users.noreply.github.com' commit -m 'build: lock dependency graph for reproducible CI'
+          git push origin "HEAD:refs/heads/${{ github.head_ref }}"
+  build-smoke:
+    needs: lockfile-bootstrap
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Clean dependency installation without lifecycle scripts
+        run: npm ci --ignore-scripts --no-audit --no-fund
+      - name: Compile
+        run: npm run build
+      - name: Event sync contract unit tests
+        run: npm test
+      - name: Verify trusted-only GitHub App private CI design (no credentials)
+        run: node --test scripts/qa/private-ci-policy.test.cjs
+
+  windows-native-sqlite:
+    needs: lockfile-bootstrap
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+      - name: Checkout pinned agentctl source for Windows interop QA
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/agentctl
+          ref: dfbe9954b27cbf14ae44173a80ca23e72199acb3
+          path: integration/agentctl
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install native SQLite binding and locked dependencies
+        run: npm ci --no-audit --no-fund
+      - name: Compile agent
+        run: npm run build
+      - name: Windows SQLite durability, dedupe and backup tests
+        run: npm run test:sqlite
+      - name: Verify CLI entrypoint without starting service
+        run: node dist/index.js --help
+      - name: Windows agent actual process crash and restart QA
+        run: npm run test:windows-process
+      - name: Pinned agentctl Windows unit regression suite
+        run: |
+          cd integration/agentctl
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
+      - name: Windows installer compatibility gate
+        run: node scripts/qa/windows-agentctl-interop.cjs
+
+  full-sync-e2e:
+    needs: lockfile-bootstrap
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    env:
+      RUN_FULL_SYNC_E2E: '1'
+      TENANT_ID: tenant_ci_qa
+      TENANT_DATABASE_URL_TEMPLATE: 'postgresql://ci_qa:ci_only_password@127.0.0.1:5432/{tenant}'
+      SYSTEM_DATABASE_URL: 'postgresql://ci_qa:ci_only_password@127.0.0.1:5432/central_ci_qa'
+      NODE_ENV: test
+      TENANT_ADMIN_AUTH_MODE: legacy
+      TENANT_ALLOW_DEV_API_KEY: 'true'
+      TENANT_ADMIN_API_KEY: ci-only-admin-credential-longer-than-32-bytes
+      TENANT_AGENT_API_KEY: ci-only-agent-credential-longer-than-32-bytes
+      CENTRAL_AGENT_API_KEY: ci-only-central-agent-credential-longer-than-32-bytes
+      CENTRAL_AGENT_KEYS_JSON: '{"tenant_ci_qa":"ci-only-central-agent-credential-longer-than-32-bytes"}'
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: ci_qa
+          POSTGRES_PASSWORD: ci_only_password
+          POSTGRES_DB: tenant_ci_qa
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U ci_qa -d tenant_ci_qa"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - name: Checkout tenant-agent draft branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref }}
+          persist-credentials: false
+      - name: Checkout exact audited tenant-service revision
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/tenant-service
+          ref: db138df1f65d3b39646106c884409129ec8f5f6d
+          path: integration/tenant-service
+          persist-credentials: false
+      - name: Checkout exact audited central-service revision
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/central-service
+          ref: d423d9fee7f3d382be8072f85cd98fc64be087e3
+          path: integration/central-service
+          persist-credentials: false
+      - name: Checkout audited Central CLI revision
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/central-cli
+          ref: e3c78a06991c9c64c39a5d57f7297605aa37a3f9
+          path: integration/central-cli
+          persist-credentials: false
+      - name: Checkout exact audited db-helper schema (no public raw URLs)
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/db-helper
+          ref: cd99b4508ba4674110484527525ad9b172618b4a
+          path: integration/db-helper
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install and build both backend services
+        shell: bash
+        run: |
+          set -euo pipefail
+          (cd integration/tenant-service && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
+          (cd integration/central-service && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
+      - name: Compile pinned Central CLI
+        run: |
+          cd integration/central-cli
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
+      - name: Build agent with native SQLite binding
+        shell: bash
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+      - name: Verify pinned db-helper schema and prepare isolated migrations
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git -C integration/db-helper rev-parse HEAD)" = "cd99b4508ba4674110484527525ad9b172618b4a"
+          mkdir -p /tmp/ums-integration-migrations
+          cp -- integration/db-helper/prisma/system/migrations/001_init_system_db/migration.sql /tmp/ums-integration-migrations/system.sql
+          cp -- integration/db-helper/prisma/tenant/migrations/20260106105615_001_tenant_init/migration.sql /tmp/ums-integration-migrations/tenant.sql
+          cp -- integration/db-helper/prisma/tenant/migrations/20260107_add_local_events/migration.sql /tmp/ums-integration-migrations/local_events.sql
+          test -s /tmp/ums-integration-migrations/system.sql
+          test -s /tmp/ums-integration-migrations/tenant.sql
+          test -s /tmp/ums-integration-migrations/local_events.sql
+      - name: Create isolated central and tenant PostgreSQL databases and apply migrations
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const { Client } = require('./integration/tenant-service/node_modules/pg');
+          (async () => {
+            const tenantUrl = process.env.TENANT_DATABASE_URL_TEMPLATE.replace('{tenant}',process.env.TENANT_ID);
+            const admin = new Client({connectionString:tenantUrl});
+            await admin.connect();
+            try { await admin.query('CREATE DATABASE central_ci_qa'); }
+            finally { await admin.end(); }
+            for (const [url,files] of [
+              [tenantUrl,['tenant.sql','local_events.sql']],
+              [process.env.SYSTEM_DATABASE_URL,['system.sql']]
+            ]) {
+              const db = new Client({connectionString:url});
+              await db.connect();
+              try {
+                for (const filename of files) {
+                  await db.query(fs.readFileSync('/tmp/ums-integration-migrations/'+filename,'utf8'));
+                }
+              } finally {await db.end();}
+            }
+          })().catch(error=>{console.error('Isolated E2E migration failed:',error.name);process.exitCode=1;});
+          NODE
+      - name: Verify HTTP to PostgreSQL to SQLite to Central event delivery
+        run: npm run test:e2e
