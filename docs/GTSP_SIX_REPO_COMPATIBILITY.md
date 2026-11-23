@@ -48,7 +48,7 @@ The default `agentctl install` mode still expects a separately supplied `tenant-
 
 **Real hosted Windows SCM acceptance PASS:** a compiled genuine tenant-agent (not synthetic worker) was staged with its native SQLite dependencies and run under an actual NSSM/SCM service. The CI tested SQLite persistence while Central is offline, real Windows service stop/restart, delivery after recovery and duplicate replay without extra central records. https://github.com/myothein/agentctl/actions/runs/45097352354
 
-**Still NO-GO:** no production-signed/reproducible Node runtime/application/native-dependencies/NSSM distribution, verified Windows service identity and NTFS ACLs, protected production config custody, live server recovery and backup-restore drills, operator-approved installation/rollback, or real Keycloak validation. Windows CI synthetic HTTP fixtures are not a replacement for an entire six-program production-equivalent deployment. See `myothein/agentctl/docs/WINDOWS_NODE_SERVICE_INSTALL_ACCEPTANCE.md`.
+**Still NO-GO:** no production-signed/reproducible Node runtime/application/native-dependencies/NSSM distribution, protected production config custody, full production service-identity/ACL drift acceptance, live server recovery and backup-restore drills, operator-approved installation/rollback, or real Keycloak validation. Independently, the latest agentctl branch passed genuine LocalService per-service SID, OWNER RIGHTS, and hostile sibling-service SQLite access/DACL denial QA (https://github.com/myothein/agentctl/actions/runs/45107220768), but this tenant-agent workflow is still pinned to its older audited agentctl source. Do not conflate independent agentctl CI with a six-program joint deployment. Windows CI synthetic HTTP fixtures are not a replacement for an entire six-program production-equivalent deployment. See `myothein/agentctl/docs/WINDOWS_NODE_SERVICE_INSTALL_ACCEPTANCE.md`.
 
 ## Windows NTFS ACL security acceptance (hosted QA)
 
@@ -58,7 +58,9 @@ This is a **source-level cross-repository compatibility check**, not a live full
 
 ## Cross-repository GitHub CI privacy requirement
 
-The integration currently checks out public service repositories and downloads immutable db-helper migration SQL from public raw GitHub. **Private repository visibility will break these public fetches** unless the authorized owner configures a least-privilege cross-repository GitHub App token for read-only checkouts and replaces the raw fetch with an authenticated pinned db-helper checkout. Do not commit credentials, rely on cross-repository default `GITHUB_TOKEN` access, or expose a privileged installation token to untrusted PRs. Close this blocker before any privacy migration / release CI claim.
+The integration still checks out service repositories that are **currently public**, but it no longer downloads db-helper migrations through public `raw.githubusercontent.com` URLs. Instead, the full-sync workflow now uses a read-only `actions/checkout@v4` at **exact audited db-helper commit `cd99b4508ba4674110484527525ad9b172618b4a`**, checks the Git HEAD revision and copies three local immutable SQL migrations into a disposable PostgreSQL 17 fixture. CI at this checkpoint: https://github.com/myothein/tenant-agent/actions/runs/45108876261 .
+
+**Private repo access remains UNVERIFIED:** the default `GITHUB_TOKEN` for a tenant-agent workflow is not an authorization to read the other private repositories. Before changing visibility, the owner must approve and provision narrowly scoped read-only GitHub App access from a **trusted workflow reference**, avoid privileged tokens in untrusted `pull_request` jobs, and demonstrate all five cross-repo checkouts on hosted Linux/Windows. Do not add secrets to GitHub sources or CI logs. Public URL removal is only one closure step; see `docs/PUBLIC_EXPOSURE_PRIVATE_CI_CUTOVER.md` for the redacted six-repo exposure audit and staged response.
 
 ## Required closure before any merge/deploy
 
