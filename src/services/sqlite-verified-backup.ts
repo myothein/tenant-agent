@@ -19,8 +19,14 @@ export function assertValidOutboxSnapshot(snapshotPath: string): void {
             "WHERE type='table' AND name='outbox'"
         ).get() as { n: number };
         if (schema.n !== 1) throw new Error('Missing SQLite outbox table');
-        // Prove the event table can actually be read from this snapshot.
-        snapshot.prepare('SELECT COUNT(*) AS n FROM outbox').get();
+        // Validate the complete read contract, not just the table name.
+        // A syntactically valid SQLite file with an incompatible outbox schema
+        // must never be advertised as a restorable agent recovery point.
+        snapshot.prepare(
+            'SELECT id, tenantId, agentId, aggregate_type, aggregate_id, ' +
+            'event_type, payload, createdAt, occurredAt, sent, status, ' +
+            'retry_count, event_version, headers FROM outbox LIMIT 1'
+        ).get();
     } catch {
         // Do not emit raw SQLite errors or paths: backup directories and
         // database content may carry tenant/user-identifying information.
