@@ -97,24 +97,36 @@ export class SyncService {
         if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) {
             throw new Error('Invalid outbox batch size');
         }
-        const unsent: any[] = this.db
-            .prepare("SELECT * FROM outbox WHERE sent = 0")
-            .all()
-            .map((row: any) => ({
-                ...row,
-                payload: typeof row.payload === "string" ? JSON.parse(row.payload) : row.payload,
-            }));
-
-        if (!unsent.length) return 0;
-
-        Logger.info(`[Sync] Flushing ${unsent.length} event(s) to system API in batches of ${batchSize}...`);
+        // The manual CLI uses the same bounded, stable SQLite snapshot rule
+        // as the daemon: scan a finite high-water mark, not an unbounded .all().
+        const highWater = this.db.prepare(
+            'SELECT MAX(rowid) AS lastRowId FROM outbox WHERE sent=0'
+        ).get() as { lastRowId: number | null };
+        if (highWater.lastRowId === null) return 0;
+        const page = this.db.prepare(
+            'SELECT rowid AS scanRowId, * FROM outbox ' +
+            'WHERE sent=0 AND rowid>? AND rowid<=? ORDER BY rowid ASC LIMIT ?'
+        );
+        let cursor = 0;
         let flushedCount = 0;
 
-        for (let i = 0; i < unsent.length; i += batchSize) {
-            const batch = unsent.slice(i, i + batchSize);
-
+        while (cursor < highWater.lastRowId) {
+            const batch = page.all(cursor, highWater.lastRowId, batchSize) as
+                Array<{ scanRowId: number; payload: string; [key: string]: unknown }>;
+            if (batch.length === 0) break;
+            cursor = batch[batch.length - 1].scanRowId;
             const results = await Promise.allSettled(
-                batch.map(async (event) => {
+                batch.map(async row => {
+                    let parsed: unknown;
+                    try { parsed = JSON.parse(row.payload); }
+                    catch {
+                        // Preserve a corrupt source event for authorized recovery.
+                        // Never print the event payload or the JSON parser error.
+                        Logger.error('[Sync] Invalid SQLite event JSON; record retained for review');
+                        return false;
+                    }
+                    const event = { ...row, payload: parsed };
+
                     if (!process.env.TENANT_ID ||
                         event.tenantId !== process.env.TENANT_ID) {
                         Logger.error('[Sync] Cross-tenant outbox event blocked before network delivery');
@@ -149,8 +161,9 @@ export class SyncService {
                         this.db.prepare("UPDATE outbox SET sent=1, status='sent' WHERE id=?").run(event.id);
                         Logger.info(`[Sync] Event ${event.id} sent successfully`);
                         return true;
-                    } catch (err: any) {
-                        Logger.error(`[Sync] Failed to send event ${event.id}: ${err.message}`);
+                    } catch {
+                        // Network errors can contain private headers and event URLs.
+                        Logger.error('[Sync] Central event delivery failed; event remains queued');
 
                         this.db.prepare(`
               UPDATE outbox
