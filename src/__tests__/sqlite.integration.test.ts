@@ -403,3 +403,89 @@ test('Windows SQLite: invalid outbox source never prints private event payload',
         rmSync(directory, { recursive: true, force: true });
     }
 });
+
+
+test('Windows SQLite: manual sync bounds memory and isolates malformed JSON', async () => {
+    const cwd = process.cwd();
+    const dir = mkdtempSync(path.join(tmpdir(), 'agent-cli-bounded-'));
+    const previous = {
+        tenant: process.env.TENANT_ID, url: process.env.SYSTEM_API_URL,
+        key: process.env.CENTRAL_AGENT_API_KEY
+    };
+    const fetchBefore = globalThis.fetch;
+    const errorBefore = console.error;
+    const errors: string[] = [];
+    const delivered: string[] = [];
+    let sync: SyncService | undefined;
+    try {
+        process.chdir(dir);
+        process.env.TENANT_ID = 'ci-manual-tenant';
+        process.env.SYSTEM_API_URL = 'http://127.0.0.1:5000';
+        process.env.CENTRAL_AGENT_API_KEY = 'ci-manual-agent-key-more-than-32-bytes';
+        sync = new SyncService();
+        const ids = Array.from({ length: 14 }, () => randomUUID());
+        const badId = randomUUID();
+        const injectedId = randomUUID();
+        const makeEvent = (id: string) => ({
+            id, tenantId: 'ci-manual-tenant', agentId: 'tenant-agent',
+            aggregate_type: 'Subject', aggregate_id: '2',
+            event_type: 'subject.created', payload: { id: 2, name: 'QA Synthetic' },
+            createdAt: '2026-01-01T00:00:00.000Z',
+            occurredAt: '2026-01-01T00:00:00.000Z'
+        });
+        for (const id of ids) sync.addEvent(makeEvent(id));
+        sync.addEvent(makeEvent(badId));
+        const dbPath = path.join(dir, 'data/outbox.db');
+        const sqlite = new Database(dbPath);
+        try {
+            sqlite.prepare('UPDATE outbox SET payload=? WHERE id=?').run(
+                '{"sensitive":"PRIVATE_INVALID_JSON_SENTINEL"', badId
+            );
+        } finally { sqlite.close(); }
+
+        let appended = false;
+        globalThis.fetch = async (_url, options) => {
+            const event = JSON.parse(String(options?.body)) as { id: string };
+            delivered.push(event.id);
+            if (!appended) {
+                appended = true;
+                sync!.addEvent(makeEvent(injectedId));
+            }
+            return new Response(JSON.stringify({
+                success: true, status: 'accepted', eventId: event.id
+            }), { status: 201, headers: { 'content-type': 'application/json' } });
+        };
+        console.error = (...values: unknown[]) => {
+            errors.push(values.map(String).join(' '));
+        };
+        assert.equal(await sync.flushOutbox(3), ids.length);
+        assert.equal(delivered.includes(injectedId), false,
+            'An event appended during the current flush is deferred');
+        assert.equal(delivered.includes(badId), false, 'Malformed JSON is never transmitted');
+        assert.equal(delivered.length, ids.length);
+        assert.ok(errors.some(message => message.includes('Invalid SQLite event JSON')));
+        assert.ok(!errors.join(' ').includes('PRIVATE_INVALID_JSON_SENTINEL'),
+            'Raw corrupt event payload must never appear in logs');
+
+        const snapshot = new Database(dbPath, { readonly: true });
+        try {
+            const malformed = snapshot.prepare('SELECT sent, status, retry_count FROM outbox WHERE id=?')
+                .get(badId) as { sent: number; status: string; retry_count: number };
+            assert.deepEqual(malformed, { sent: 0, status: 'pending', retry_count: 0 });
+        } finally { snapshot.close(); }
+        assert.equal(await sync.flushOutbox(3), 1);
+        assert.equal(delivered.at(-1), injectedId);
+    } finally {
+        console.error = errorBefore;
+        globalThis.fetch = fetchBefore;
+        if (previous.tenant === undefined) delete process.env.TENANT_ID;
+        else process.env.TENANT_ID = previous.tenant;
+        if (previous.url === undefined) delete process.env.SYSTEM_API_URL;
+        else process.env.SYSTEM_API_URL = previous.url;
+        if (previous.key === undefined) delete process.env.CENTRAL_AGENT_API_KEY;
+        else process.env.CENTRAL_AGENT_API_KEY = previous.key;
+        sync?.close();
+        process.chdir(cwd);
+        rmSync(dir, { recursive: true, force: true });
+    }
+});
