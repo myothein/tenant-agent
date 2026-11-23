@@ -11,7 +11,7 @@
 | central-service | `d423d9fee7f3d382be8072f85cd98fc64be087e3` | https://github.com/myothein/central-service/actions/runs/45089375818 |
 | tenant-service | `db138df1f65d3b39646106c884409129ec8f5f6d` | https://github.com/myothein/tenant-service/actions/runs/45088141628 |
 | db-helper | `cd99b4508ba4674110484527525ad9b172618b4a` | https://github.com/myothein/db-helper/actions/runs/45092347091 |
-| tenant-agent | `680c1e320ecf22df21aa23630d86bac0e780bac3` (latest four-component runtime E2E code checkpoint; subsequent documentation edits only) | https://github.com/myothein/tenant-agent/actions/runs/45094625388 |
+| tenant-agent | `a291d489372f61f920d87b54e0cafe29fba17060` (five-repository E2E source checkpoint with compiled Central CLI; later docs only) | https://github.com/myothein/tenant-agent/actions/runs/45095066247 |
 | agentctl | `cf3b3c2ff733824f8c99438b9ff02063d3e6fb1d` | https://github.com/myothein/agentctl/actions/runs/45091030970 |
 | central-cli | `e3c78a06991c9c64c39a5d57f7297605aa37a3f9` | https://github.com/myothein/central-cli/actions/runs/45089801483 |
 
@@ -27,6 +27,7 @@ All revisions above are immutable commit identifiers, not moving branch tags. Th
 | Existing Central event UUID replayed with mutated contents | HTTP 409; original persisted PostgreSQL payload unchanged | tenant-agent latest E2E run |
 | Versioned db-helper system/tenant/local-event migrations applied into fresh isolated PostgreSQL databases | PASS as part of E2E; three migration files pinned to db-helper revision | tenant-agent latest E2E run |
 | central-cli signed RS256 JWT against OIDC-hardened central-service and disposable PostgreSQL 17 | PASS with local mock JWKS / synthetic token, NOT real Keycloak | central-cli own CI run |
+| **Same-database five-repository QA:** compiled Central CLI process lists the tenant used by the PostgreSQL → SQLite → PostgreSQL event pipeline, validates OIDC and rejects TENANT_ADMIN-only token | PASS with real Central API and shared disposable PostgreSQL 17 fixture; no real Keycloak | tenant-agent five-repository E2E run https://github.com/myothein/tenant-agent/actions/runs/45095066247 |
 | agentctl signed artifact verification, simulated rollback and disposable Windows NSSM/SCM start/stop/rollback | PASS on hosted Windows QA, NOT production Windows server | agentctl own CI run |
 | Combined six-program installation and single host/distributed deployment | **NOT TESTED** | Outstanding |
 | Real Keycloak, Windows production deployment, live data migration, encrypted backup/restore and UIMS V1 integration | **NOT TESTED** | Outstanding |
@@ -38,6 +39,10 @@ All revisions above are immutable commit identifiers, not moving branch tags. Th
 - Central agent transport: distinct per-tenant machine keys and immutable source event UUIDs; active tenant and exact accepted/duplicate acknowledgment required before outbox deletion.
 - PostgreSQL tenant isolation: separately scoped tenant database roles and immutable SQL migrations; production DB provisioning and destructive restores remain disabled pending controlled acceptance.
 - Signed Windows updates: agentctl staged verification and rollback QA do not authorize an in-place production update.
+
+## Cross-repository GitHub CI privacy requirement
+
+The integration currently checks out public service repositories and downloads immutable db-helper migration SQL from public raw GitHub. **Private repository visibility will break these public fetches** unless the authorized owner configures a least-privilege cross-repository GitHub App token for read-only checkouts and replaces the raw fetch with an authenticated pinned db-helper checkout. Do not commit credentials, rely on cross-repository default `GITHUB_TOKEN` access, or expose a privileged installation token to untrusted PRs. Close this blocker before any privacy migration / release CI claim.
 
 ## Required closure before any merge/deploy
 
