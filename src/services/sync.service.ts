@@ -112,7 +112,10 @@ export class SyncService {
 
         while (cursor < highWater.lastRowId) {
             const batch = page.all(cursor, highWater.lastRowId, batchSize) as
-                Array<{ scanRowId: number; payload: string; [key: string]: unknown }>;
+                Array<{ scanRowId: number; id: string; tenantId: string; agentId: string;
+                    aggregate_type: string; aggregate_id: string; event_type: string;
+                    payload: string; createdAt: string; occurredAt: string;
+                    retry_count: number }>;
             if (batch.length === 0) break;
             cursor = batch[batch.length - 1].scanRowId;
             const results = await Promise.allSettled(
