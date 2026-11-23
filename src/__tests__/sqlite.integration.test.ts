@@ -621,6 +621,16 @@ test('Windows SQLite: verified backup atomically refuses overwrite and rejects c
             /SQLite outbox backup verification failed/);
         assert.throws(() => assertValidOutboxSnapshot(path.join(workspace,'absent.db')),
             /SQLite outbox backup verification failed/);
+
+        // SQLite integrity_check alone cannot detect a valid but incompatible
+        // schema. A misleading "outbox" table must also be rejected.
+        const wrongSchema = path.join(workspace, 'synthetic-wrong-schema.db');
+        const incompatible = new Database(wrongSchema);
+        try {
+            incompatible.prepare('CREATE TABLE outbox (id TEXT PRIMARY KEY)').run();
+        } finally { incompatible.close(); }
+        assert.throws(() => assertValidOutboxSnapshot(wrongSchema),
+            /SQLite outbox backup verification failed/);
     } finally {
         canonical?.close();
         manual?.close();
