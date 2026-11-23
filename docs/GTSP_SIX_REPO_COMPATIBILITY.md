@@ -11,7 +11,7 @@
 | central-service | `d423d9fee7f3d382be8072f85cd98fc64be087e3` | https://github.com/myothein/central-service/actions/runs/45089375818 |
 | tenant-service | `db138df1f65d3b39646106c884409129ec8f5f6d` | https://github.com/myothein/tenant-service/actions/runs/45088141628 |
 | db-helper | `cd99b4508ba4674110484527525ad9b172618b4a` | https://github.com/myothein/db-helper/actions/runs/45092347091 |
-| tenant-agent | `f260e87ef15e3bd1b714957f808d45ae064a641c` (latest six-repo Windows/Node installer pin; docs-only commits afterwards) | https://github.com/myothein/tenant-agent/actions/runs/45097648322 |
+| tenant-agent | `9045803d8611d818f98de6eb4bd5f442c7e8bc8c` (ACL-hardened agentctl pinned; runtime CI checkpoint) | https://github.com/myothein/tenant-agent/actions/runs/45100869947 |
 | agentctl | `dfbe9954b27cbf14ae44173a80ca23e72199acb3` (actual Windows SCM offline/replay + restrictive NTFS ACL acceptance) | https://github.com/myothein/agentctl/actions/runs/45100610690 |
 | central-cli | `e3c78a06991c9c64c39a5d57f7297605aa37a3f9` | https://github.com/myothein/central-cli/actions/runs/45089801483 |
 
