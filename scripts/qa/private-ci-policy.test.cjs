@@ -21,6 +21,7 @@ test('private CI runs only from owner-confirmed protected main dispatch',()=>{
   assert.doesNotMatch(yml,/^\s{2}(?:pull_request|pull_request_target|workflow_run|push|schedule):/m);
   assert.match(privateJob,/github\.event_name == 'workflow_dispatch'/);
   assert.match(privateJob,/github\.repository == 'myothein\/tenant-agent'/);
+  assert.match(privateJob,/github\.actor == 'myothein'/);
   assert.match(privateJob,/github\.ref == 'refs\/heads\/main'/);
   assert.match(privateJob,/AUTHORIZE-READONLY-QA/);
   assert.match(privateJob,/^    environment: gtsp-private-ci$/m);
