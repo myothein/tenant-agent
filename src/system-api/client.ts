@@ -13,6 +13,26 @@ export interface CentralEventEnvelope {
     occurredAt: string;
 }
 
+/** Only the central origin or the canonical /api/v1 prefix is accepted. */
+export function resolveSystemApiBaseUrl(configured: string): string {
+    let url: URL;
+    try { url = new URL(configured); }
+    catch { throw new Error('Invalid SYSTEM_API_URL'); }
+    if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password ||
+        url.search || url.hash) {
+        throw new Error('Invalid SYSTEM_API_URL');
+    }
+    const path = url.pathname.replace(/\/+$/, '');
+    if (path && path !== '/api/v1') {
+        throw new Error('SYSTEM_API_URL must use the central API origin or /api/v1');
+    }
+    if (url.protocol === 'http:' &&
+        !['localhost','127.0.0.1','[::1]','::1'].includes(url.hostname)) {
+        throw new Error('SYSTEM_API_URL must use HTTPS outside loopback');
+    }
+    return url.origin;
+}
+
 /**
  * Scoped client for Central Service. The old on-disk token fallback is deliberately
  * NOT used for event delivery. Inject CENTRAL_AGENT_API_KEY securely at runtime.
@@ -23,16 +43,7 @@ export class SystemApiClient {
         this.timeoutMs = options.timeoutMs ?? 5000;
     }
     private get baseUrl(): string {
-        const configured = loadConfig().systemApiUrl.replace(/\/+$/, '');
-        const root = configured.replace(/\/api\/v1$/, '');
-        const url = new URL(root);
-        if (!['https:', 'http:'].includes(url.protocol) || url.username || url.password) {
-            throw new Error('Invalid SYSTEM_API_URL');
-        }
-        if (url.protocol === 'http:' && !['localhost','127.0.0.1','[::1]','::1'].includes(url.hostname)) {
-            throw new Error('SYSTEM_API_URL must use HTTPS outside loopback');
-        }
-        return root;
+        return resolveSystemApiBaseUrl(loadConfig().systemApiUrl);
     }
     private agentAuthorization(): string {
         const value = process.env.CENTRAL_AGENT_API_KEY;
