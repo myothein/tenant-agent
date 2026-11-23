@@ -28,6 +28,14 @@ Removing a file in a Draft PR does **not** remove it from `main`, the repository
 2. The `tenant-agent` full-sync workflow previously fetched three immutable `db-helper` SQL migrations from **public** `raw.githubusercontent.com` URLs. It now checks out `myothein/db-helper` at `cd99b4508ba4674110484527525ad9b172618b4a` using `actions/checkout@v4` with `persist-credentials:false`, compares `git rev-parse HEAD` with the exact expected commit, and copies the three audited migration files locally. This removes the **public raw URL dependency** but **not** the need for authorization once `db-helper` becomes private. The current job includes PostgreSQL 17 isolated migrations and no production database.
 3. The pipeline still checks out `tenant-service`, `central-service`, `central-cli`, `db-helper` and `agentctl` from the six public repositories. No new cross-repository private token was issued or attached.
 
+## Prepared, deliberately inactive trusted private-source workflow
+
+The hardening Draft PR now includes `.github/workflows/private-readonly-ci.yml`, an **owner-actor-only, main-branch-only, manual `workflow_dispatch`** design. It requires input `AUTHORIZE-READONLY-QA` and an owner-configured protected environment `gtsp-private-ci`. The workflow would use short-lived GitHub App installation credentials with **Contents: read** on exactly the six named repositories; all source SHAs and all GitHub Actions are immutable full SHA references. Its privileged checkout job never executes source scripts and strips Git metadata, credentials and runtime artifacts from the transferred snapshot. A second job builds source **without** the App token or secret environment.
+
+A normal, non-secret pull-request policy test `scripts/qa/private-ci-policy.test.cjs` now checks this trust separation, manual trigger, exact owner, branches, immutable refs and read-only access. This test is automatically called by the existing `build-smoke` job. See `docs/GTSP_PRIVATE_READONLY_CI_SETUP.md` for the owner-action sequence and actual acceptance evidence still required.
+
+**This workflow is not running yet:** `workflow_dispatch` requires the file to exist on the default branch, and the file is still in an **unmerged Draft PR**. No GitHub App installation, environment key/variable, token or private checkout was created or exercised. The existing `pull_request` integration workflow still relies on public repository visibility and will need a separate safe private strategy after owner approval. No workflow was granted a privileged token in these changes.
+
 ## Secure cutover sequence — requires owner and security approval
 
 1. **Inventory and containment:** Classify each `.env` setting and both SQLite artifacts by system, owner, credential issuer, access scope and whether the referenced endpoint is reachable/live. Do not post secret values or DB rows to GitHub issues, PR comments or chats.
@@ -41,7 +49,7 @@ Removing a file in a Draft PR does **not** remove it from `main`, the repository
 ## Explicit release blockers and current evidence
 
 - **Public / historical tracked secrets and runtime data: OPEN.** Do not treat a green hygiene check on an unmerged branch as remediation of public `main`.
-- **Private cross-repository checkout access: OPEN.** No read-only GitHub App token or trusted dispatch has been configured or verified.
+- **Private cross-repository checkout access: OPEN (workflow design prepared, static policy tested).** No read-only GitHub App installation/token or protected environment has been configured or verified. The manual trusted workflow remains inactive until reviewed on the default branch and owner action.
 - **Production keys rotation, source integrity, real Keycloak, off-host restore, six-component production-equivalent acceptance: OPEN.**
 - **No changes** were made here to repository visibility, default branches, PR merge status, Git history, live secrets, remote Windows services, production databases or UIMS V1.
 
