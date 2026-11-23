@@ -62,6 +62,14 @@ The integration still checks out service repositories that are **currently publi
 
 **Private repo access remains UNVERIFIED:** the default `GITHUB_TOKEN` for a tenant-agent workflow is not an authorization to read the other private repositories. Before changing visibility, the owner must approve and provision narrowly scoped read-only GitHub App access from a **trusted workflow reference**, avoid privileged tokens in untrusted `pull_request` jobs, and demonstrate all five cross-repo checkouts on hosted Linux/Windows. Do not add secrets to GitHub sources or CI logs. Public URL removal is only one closure step; see `docs/PUBLIC_EXPOSURE_PRIVATE_CI_CUTOVER.md` for the redacted six-repo exposure audit and staged response.
 
+## Private CI trusted manual acceptance design — READY FOR OWNER REVIEW, NOT ACTIVE
+
+An additional `.github/workflows/private-readonly-ci.yml` is prepared on this existing Draft PR branch. Its privileged checkout job requires a **manual dispatch on protected `main`**, exact owner actor, an explicit acknowledgement and the separately configured `gtsp-private-ci` environment. It uses a GitHub App installation token requested with `permission-contents: read` and exactly six named repos, with 40-character pinned source SHAs, `persist-credentials:false` and every third-party workflow action pinned to full SHA. It runs no untrusted source code. The token is automatically revoked at the end of that job; a second job builds all six source snapshots from an ephemeral one-day artifact **without token access**.
+
+A static security policy test, `node --test scripts/qa/private-ci-policy.test.cjs`, is now part of the normal non-secret `build-smoke` PR CI. This **does not prove** a GitHub App installation exists, that its permissions are correct, or that cross-private checkouts work. The workflow will not be dispatchable until reviewed and authorized on the **default `main` branch**, and required reviewers/branch rules/environment secrets must be configured manually by the owner. Existing PR full-sync E2E still checks out public repositories with its older agentctl pin; no shared private token was added to those untrusted PR jobs.
+
+Read `docs/GTSP_PRIVATE_READONLY_CI_SETUP.md` for safe manual setup and `docs/PUBLIC_EXPOSURE_PRIVATE_CI_CUTOVER.md` for the tracked historical `.env`/SQLite risk inventory.
+
 ## Required closure before any merge/deploy
 
 1. Make all six repositories private with verified owner permissions and assess the old public `.env` and history/forks/caches exposure. Rotate/revoke **potentially exposed live** credentials through an approved incident workflow. Never share them in a PR.
