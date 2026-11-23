@@ -98,7 +98,7 @@ test('non-production backup policy preserves existing isolated QA directory beha
 test('production agent process refuses to sync if backup destination was not provisioned', () => {
     const work = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-prod-no-backup-'));
     try {
-        const env = {
+        const env: NodeJS.ProcessEnv = {
             ...process.env,
             NODE_ENV: 'production',
             TENANT_ID: 'tenant_ci_qa',
