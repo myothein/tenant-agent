@@ -94,6 +94,44 @@ test('full three-service PostgreSQL to SQLite to PostgreSQL event sync, replay a
         assert.equal(centralRow.rows[0].tenantId,tenantId);
         assert.equal(centralRow.rows[0].payload.data.id,first.id);
 
+        // Negative authorization contract against the ACTUAL pinned services:
+        // A Central tenant-specific machine key must not export another tenant's
+        // event or grant access to tenant-service administrator actions.
+        const foreignEventId=randomUUID();
+        const foreignResponse=await fetch(centralHttp.url+'/api/v1/events',{
+            method:'POST',
+            headers:{authorization:'Bearer '+centralKey,'content-type':'application/json'},
+            body:JSON.stringify({
+                id:foreignEventId,tenantId:'another_university',
+                agentId:'tenant-agent',event_type:'subject.created',
+                aggregate_type:'Subject',aggregate_id:'991',
+                payload:{id:991,name:'Foreign Synthetic Subject'},
+                occurredAt:'2026-01-01T00:00:00.000Z'
+            })
+        });
+        assert.equal(foreignResponse.status,401,
+            'A tenant A machine credential may not write Central events for tenant B');
+        assert.equal((await cp.query('SELECT id FROM events WHERE id=$1',[foreignEventId])).rowCount,0);
+
+        const tenantAdminDenied=await fetch(tenantHttp.url+'/subjects',{
+            method:'POST',
+            headers:{authorization:'Bearer '+centralKey,'content-type':'application/json'},
+            body:JSON.stringify({name:'Unauthorized Synthetic Subject'})
+        });
+        assert.equal(tenantAdminDenied.status,401,
+            'Central agent credential cannot become tenant administrator');
+
+        const tenantHeaderDenied=await fetch(tenantHttp.url+'/subjects',{
+            method:'POST',
+            headers:{
+                authorization:'Bearer '+adminKey,'content-type':'application/json',
+                'x-tenant-id':'another_university'
+            },
+            body:JSON.stringify({name:'Injected Synthetic Subject'})
+        });
+        assert.equal(tenantHeaderDenied.status,403,
+            'Tenant-service must reject client-provided tenant switching headers');
+
         // Crash window: central wrote event, local sent flag was not committed.
         const replay=new Database(path.join(temp,'data/outbox.db'));
         try { replay.prepare("UPDATE outbox SET sent=0,status='pending' WHERE id=?").run(originalId); }
