@@ -389,7 +389,7 @@ test('Windows SQLite: invalid outbox source never prints private event payload',
             occurred_at: '2026-01-01T00:00:00.000Z',
             // Functions cannot be serialized as JSON; trigger the invalid
             // record guard without introducing a real credential.
-            headers: (() => 'invalid fixture')
+            headers: (() => 'invalid fixture') as unknown as string
         };
         console.error = (...parts: unknown[]) => { log.push(parts.map(String).join(' ')); };
         assert.throws(() => local!.addToOutbox(event), /Invalid outbox record/);
