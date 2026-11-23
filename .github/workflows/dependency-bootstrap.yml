@@ -51,6 +51,8 @@ jobs:
         run: npm run build
       - name: Event sync contract unit tests
         run: npm test
+      - name: Verify trusted-only GitHub App private CI design (no credentials)
+        run: node --test scripts/qa/private-ci-policy.test.cjs
 
   windows-native-sqlite:
     needs: lockfile-bootstrap
