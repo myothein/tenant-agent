@@ -11,7 +11,7 @@
 | central-service | `d423d9fee7f3d382be8072f85cd98fc64be087e3` | https://github.com/myothein/central-service/actions/runs/45089375818 |
 | tenant-service | `db138df1f65d3b39646106c884409129ec8f5f6d` | https://github.com/myothein/tenant-service/actions/runs/45088141628 |
 | db-helper | `cd99b4508ba4674110484527525ad9b172618b4a` | https://github.com/myothein/db-helper/actions/runs/45092347091 |
-| tenant-agent | `45e568b65e1ea8b5706d1bf7470b8491706edbee` (six-repo source compatibility QA checkpoint) | https://github.com/myothein/tenant-agent/actions/runs/45095727438 |
+| tenant-agent | `f260e87ef15e3bd1b714957f808d45ae064a641c` (latest six-repo Windows/Node installer pin; docs-only commits afterwards) | https://github.com/myothein/tenant-agent/actions/runs/45097648322 |
 | agentctl | `9e6a705eb052d17ee07b53f7aaee65776b9bf916` (Node 22 NSSM genuine agent SCM + offline/replay tested) | https://github.com/myothein/agentctl/actions/runs/45097352354 |
 | central-cli | `e3c78a06991c9c64c39a5d57f7297605aa37a3f9` | https://github.com/myothein/central-cli/actions/runs/45089801483 |
 
