@@ -1,0 +1,179 @@
+# Prepared in a DRAFT. Inactive until reviewed and merged on protected main.
+# No pull_request, pull_request_target, workflow_run, push, or automatic secrets.
+# Requires owner-created protected environment: gtsp-private-ci.
+name: GTSP private read-only six-repository QA (owner-triggered)
+on:
+  workflow_dispatch:
+    inputs:
+      approval:
+        description: 'Type AUTHORIZE-READONLY-QA after repository owner/security review'
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  fetch-audited-sources:
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'myothein/tenant-agent' && github.ref == 'refs/heads/main' && inputs.approval == 'AUTHORIZE-READONLY-QA' }}
+    runs-on: ubuntu-latest
+    environment: gtsp-private-ci
+    timeout-minutes: 12
+    permissions:
+      contents: read
+    steps:
+      - name: Acquire narrow, revocable GitHub App token (read-only)
+        id: readonly-app
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.GTSP_CI_APP_CLIENT_ID }}
+          private-key: ${{ secrets.GTSP_CI_APP_PRIVATE_KEY }}
+          owner: myothein
+          repositories: |
+            central-service
+            tenant-service
+            db-helper
+            tenant-agent
+            agentctl
+            central-cli
+          permission-contents: read
+
+      # All six refs are audited immutable PR-HEAD source snapshots.
+      # Never accept a run-time input for a repo/ref, shell command or artifact.
+      - name: Checkout audited central-service
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/central-service
+          ref: d423d9fee7f3d382be8072f85cd98fc64be087e3
+          path: snapshot/central-service
+          token: ${{ steps.readonly-app.outputs.token }}
+          persist-credentials: false
+      - name: Checkout audited tenant-service
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/tenant-service
+          ref: db138df1f65d3b39646106c884409129ec8f5f6d
+          path: snapshot/tenant-service
+          token: ${{ steps.readonly-app.outputs.token }}
+          persist-credentials: false
+      - name: Checkout audited db-helper
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/db-helper
+          ref: cd99b4508ba4674110484527525ad9b172618b4a
+          path: snapshot/db-helper
+          token: ${{ steps.readonly-app.outputs.token }}
+          persist-credentials: false
+      - name: Checkout audited tenant-agent
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/tenant-agent
+          ref: ce06a973dfd3bde7603c604d06e5b25be1102a98
+          path: snapshot/tenant-agent
+          token: ${{ steps.readonly-app.outputs.token }}
+          persist-credentials: false
+      - name: Checkout audited agentctl
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/agentctl
+          ref: 6738bf136fc2f5e8a8e5d192ca8343160642ca9c
+          path: snapshot/agentctl
+          token: ${{ steps.readonly-app.outputs.token }}
+          persist-credentials: false
+      - name: Checkout audited central-cli
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/central-cli
+          ref: e3c78a06991c9c64c39a5d57f7297605aa37a3f9
+          path: snapshot/central-cli
+          token: ${{ steps.readonly-app.outputs.token }}
+          persist-credentials: false
+
+      - name: Refuse unexpected revisions or tracked secret/runtime artifacts
+        shell: bash
+        run: |
+          set -euo pipefail
+          while read -r name expected; do
+            actual="$(git -C "snapshot/$name" rev-parse HEAD)"
+            test "$actual" = "$expected" || { echo "::error::Unexpected audited source revision"; exit 1; }
+            if git -C "snapshot/$name" ls-files |
+                grep -E '(^|/)(\.env($|\.[^/]+$)|data/[^/]*\.db$|mybackup/|node_modules/)' |
+                grep -Ev '(^|/)\.env\.(example|template)$'; then
+              echo "::error::Audited source contains tracked secret/runtime artifacts"
+              exit 1
+            fi
+          done <<'PINNED_SOURCES'
+          central-service d423d9fee7f3d382be8072f85cd98fc64be087e3
+          tenant-service db138df1f65d3b39646106c884409129ec8f5f6d
+          db-helper cd99b4508ba4674110484527525ad9b172618b4a
+          tenant-agent ce06a973dfd3bde7603c604d06e5b25be1102a98
+          agentctl 6738bf136fc2f5e8a8e5d192ca8343160642ca9c
+          central-cli e3c78a06991c9c64c39a5d57f7297605aa37a3f9
+          PINNED_SOURCES
+          # The privileged job never executes code from any checked-out repository.
+          # Do not archive Git object databases, caches, credentials or runtime data.
+          tar -czf "$RUNNER_TEMP/gtsp-audited-sources.tgz" \
+            --exclude=.git --exclude=node_modules --exclude=dist \
+            --exclude='.env' --exclude='*.db' --exclude='*.db-*' \
+            -C snapshot central-service tenant-service db-helper tenant-agent agentctl central-cli
+
+      - name: Transfer source snapshot only, not App tokens or Git metadata
+        uses: actions/upload-artifact@v4
+        with:
+          name: gtsp-audited-sources
+          path: ${{ runner.temp }}/gtsp-audited-sources.tgz
+          retention-days: 1
+          if-no-files-found: error
+
+  build-without-private-token:
+    needs: fetch-audited-sources
+    if: ${{ needs.fetch-audited-sources.result == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    permissions:
+      contents: read
+    steps:
+      - name: Retrieve token-free source artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: gtsp-audited-sources
+          path: ${{ runner.temp }}/gtsp-snapshot
+      - name: Check tar entries before unpacking
+        shell: bash
+        run: |
+          set -euo pipefail
+          TAR="$RUNNER_TEMP/gtsp-snapshot/gtsp-audited-sources.tgz"
+          test -s "$TAR"
+          if tar -tzf "$TAR" | grep -E '(^/|(^|/)\.\.(/|$)|(^|/)\.git(/|$)|(^|/)\.env$|(^|/)node_modules(/|$))'; then
+            echo "::error::Untrusted source archive path"
+            exit 1
+          fi
+          mkdir -p snapshot
+          tar -xzf "$TAR" -C snapshot --no-same-owner --no-same-permissions
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Build all six components from reviewed, immutable source
+        shell: bash
+        run: |
+          set -euo pipefail
+          for component in central-service tenant-service db-helper central-cli agentctl; do
+            (
+              cd "snapshot/$component"
+              npm ci --ignore-scripts --no-audit --no-fund
+              npm run build
+            )
+          done
+          (
+            cd snapshot/tenant-agent
+            npm ci --no-audit --no-fund
+            npm run build
+            npm test
+          )
+      - name: Confirm no private App credentials are needed by build
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -d snapshot/tenant-agent/.git
+          test ! -e snapshot/tenant-agent/.env
+          echo 'PASS isolated six-source build on token-free runner'
