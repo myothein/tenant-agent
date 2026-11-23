@@ -24,7 +24,7 @@ jobs:
     steps:
       - name: Acquire narrow, revocable GitHub App token (read-only)
         id: readonly-app
-        uses: actions/create-github-app-token@v3
+        uses: actions/create-github-app-token@f418cff399f7aef4c2f0ad47e25ca7a6abbdd6fc # v3
         with:
           client-id: ${{ vars.GTSP_CI_APP_CLIENT_ID }}
           private-key: ${{ secrets.GTSP_CI_APP_PRIVATE_KEY }}
@@ -41,7 +41,7 @@ jobs:
       # All six refs are audited immutable PR-HEAD source snapshots.
       # Never accept a run-time input for a repo/ref, shell command or artifact.
       - name: Checkout audited central-service
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: myothein/central-service
           ref: d423d9fee7f3d382be8072f85cd98fc64be087e3
@@ -49,7 +49,7 @@ jobs:
           token: ${{ steps.readonly-app.outputs.token }}
           persist-credentials: false
       - name: Checkout audited tenant-service
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: myothein/tenant-service
           ref: db138df1f65d3b39646106c884409129ec8f5f6d
@@ -57,7 +57,7 @@ jobs:
           token: ${{ steps.readonly-app.outputs.token }}
           persist-credentials: false
       - name: Checkout audited db-helper
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: myothein/db-helper
           ref: cd99b4508ba4674110484527525ad9b172618b4a
@@ -65,7 +65,7 @@ jobs:
           token: ${{ steps.readonly-app.outputs.token }}
           persist-credentials: false
       - name: Checkout audited tenant-agent
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: myothein/tenant-agent
           ref: ce06a973dfd3bde7603c604d06e5b25be1102a98
@@ -73,7 +73,7 @@ jobs:
           token: ${{ steps.readonly-app.outputs.token }}
           persist-credentials: false
       - name: Checkout audited agentctl
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: myothein/agentctl
           ref: 6738bf136fc2f5e8a8e5d192ca8343160642ca9c
@@ -81,7 +81,7 @@ jobs:
           token: ${{ steps.readonly-app.outputs.token }}
           persist-credentials: false
       - name: Checkout audited central-cli
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           repository: myothein/central-cli
           ref: e3c78a06991c9c64c39a5d57f7297605aa37a3f9
@@ -118,7 +118,7 @@ jobs:
             -C snapshot central-service tenant-service db-helper tenant-agent agentctl central-cli
 
       - name: Transfer source snapshot only, not App tokens or Git metadata
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: gtsp-audited-sources
           path: ${{ runner.temp }}/gtsp-audited-sources.tgz
@@ -134,7 +134,7 @@ jobs:
       contents: read
     steps:
       - name: Retrieve token-free source artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           name: gtsp-audited-sources
           path: ${{ runner.temp }}/gtsp-snapshot
@@ -150,7 +150,7 @@ jobs:
           fi
           mkdir -p snapshot
           tar -xzf "$TAR" -C snapshot --no-same-owner --no-same-permissions
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: '22'
       - name: Build all six components from reviewed, immutable source
