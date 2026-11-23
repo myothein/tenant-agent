@@ -68,10 +68,11 @@ export async function startAgent(): Promise<void> {
         return backupJob;
     };
     const backupTimer=setInterval(()=>void backupOutbox(),60*60*1000);
-    const cleanupTimer=setInterval(()=>{
-        try {syncService.cleanSentEvents(config.eventRetentionMs);}
-        catch {console.error('[Cleanup] Failed to prune acknowledged events');}
-    },60*60*1000);
+    // Do NOT automatically delete acknowledged events on their creation date:
+    // a recently delivered old event can be immediately deleted, defeating
+    // disaster recovery. Retention/confirmed-delivery/purge policy is not yet
+    // accepted; preserve all event evidence until an owner-approved migration.
+    // cleanSentEvents() remains a manual capability, never auto-scheduled.
 
     // Migrations are never applied automatically during Windows service startup.
     console.log('[Tenant-Agent] Poll, durable outbox, central delivery and heartbeat active');
@@ -81,7 +82,6 @@ export async function startAgent(): Promise<void> {
         shuttingDown=true;
         clearInterval(heartbeatTimer);
         clearInterval(backupTimer);
-        clearInterval(cleanupTimer);
         let status=0;
         try {
             await syncService.stop(); // wait for any active poll/flush before closing SQLite
