@@ -228,6 +228,9 @@ export class LocalEventsSyncService {
     ============================ */
 
     async flushOutbox(batchSize = 5): Promise<number> {
+        if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+            throw new Error('Invalid outbox batch size');
+        }
         const rows = this.outboxDb
             .prepare(`
                 SELECT *
@@ -248,6 +251,13 @@ export class LocalEventsSyncService {
 
             const results = await Promise.allSettled(
                 batch.map(async (row: any) => {
+                    // A foreign-tenant row must stay safely queued for quarantine /
+                    // recovery, never leave the local host under this agent identity.
+                    if (row.tenantId !== this.tenantId ||
+                        process.env.TENANT_ID !== this.tenantId) {
+                        Logger.error('[Sync] Cross-tenant outbox event blocked before network delivery');
+                        return false;
+                    }
                     // ---------- SAFELY PARSE PAYLOAD ----------
                     let payload: Record<string, any> = {};
                     try {
