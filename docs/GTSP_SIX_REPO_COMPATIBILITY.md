@@ -12,7 +12,7 @@
 | tenant-service | `db138df1f65d3b39646106c884409129ec8f5f6d` | https://github.com/myothein/tenant-service/actions/runs/45088141628 |
 | db-helper | `cd99b4508ba4674110484527525ad9b172618b4a` | https://github.com/myothein/db-helper/actions/runs/45092347091 |
 | tenant-agent | `f260e87ef15e3bd1b714957f808d45ae064a641c` (latest six-repo Windows/Node installer pin; docs-only commits afterwards) | https://github.com/myothein/tenant-agent/actions/runs/45097648322 |
-| agentctl | `9e6a705eb052d17ee07b53f7aaee65776b9bf916` (Node 22 NSSM genuine agent SCM + offline/replay tested) | https://github.com/myothein/agentctl/actions/runs/45097352354 |
+| agentctl | `dfbe9954b27cbf14ae44173a80ca23e72199acb3` (actual Windows SCM offline/replay + restrictive NTFS ACL acceptance) | https://github.com/myothein/agentctl/actions/runs/45100610690 |
 | central-cli | `e3c78a06991c9c64c39a5d57f7297605aa37a3f9` | https://github.com/myothein/central-cli/actions/runs/45089801483 |
 
 All revisions above are immutable commit identifiers, not moving branch tags. Their individual test outcomes are NOT equivalent to a six-component production acceptance.
@@ -49,6 +49,12 @@ The default `agentctl install` mode still expects a separately supplied `tenant-
 **Real hosted Windows SCM acceptance PASS:** a compiled genuine tenant-agent (not synthetic worker) was staged with its native SQLite dependencies and run under an actual NSSM/SCM service. The CI tested SQLite persistence while Central is offline, real Windows service stop/restart, delivery after recovery and duplicate replay without extra central records. https://github.com/myothein/agentctl/actions/runs/45097352354
 
 **Still NO-GO:** no production-signed/reproducible Node runtime/application/native-dependencies/NSSM distribution, verified Windows service identity and NTFS ACLs, protected production config custody, live server recovery and backup-restore drills, operator-approved installation/rollback, or real Keycloak validation. Windows CI synthetic HTTP fixtures are not a replacement for an entire six-program production-equivalent deployment. See `myothein/agentctl/docs/WINDOWS_NODE_SERVICE_INSTALL_ACCEPTANCE.md`.
+
+## Windows NTFS ACL security acceptance (hosted QA)
+
+The audited `agentctl` revision now checks private config/runtime ACLs, application and NSSM/Node write permissions, and reparse-point paths **before** any Windows SCM operation. GitHub-hosted QA intentionally grants the `BUILTIN\\Users` group read access to a synthetic config file and verifies a **zero-NSSM-call rejection**. When the runner instead stages SHA-256-matched binaries in restricted Program Files with SYSTEM/Administrators access only, the genuine tenant-agent starts, safely queues an offline SQLite event, survives SCM stop/restart, and performs idempotent Central replay. Verified: https://github.com/myothein/agentctl/actions/runs/45100610690 .
+
+This is a **source-level cross-repository compatibility check**, not a live full six-program installation or production Windows permissions acceptance. Trusted publisher signatures, recursive module file integrity, least-privilege service identity, WAL/log/backup ACLs, real Keycloak, off-host restore, and private GitHub CI access remain open.
 
 ## Cross-repository GitHub CI privacy requirement
 
