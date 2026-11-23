@@ -86,13 +86,52 @@ test('full three-service PostgreSQL to SQLite to PostgreSQL event sync, replay a
     const originalCwd=process.cwd();
     const temp=mkdtempSync(path.join(tmpdir(),'agent-e2e-'));
     const previous={TENANT_ID:process.env.TENANT_ID,SYSTEM_API_URL:process.env.SYSTEM_API_URL,
-        TENANT_API_URL:process.env.TENANT_API_URL,CENTRAL_AGENT_API_KEY:process.env.CENTRAL_AGENT_API_KEY};
+        TENANT_API_URL:process.env.TENANT_API_URL,CENTRAL_AGENT_API_KEY:process.env.CENTRAL_AGENT_API_KEY,
+        CENTRAL_OIDC_ISSUER:process.env.CENTRAL_OIDC_ISSUER,
+        CENTRAL_OIDC_JWKS_URL:process.env.CENTRAL_OIDC_JWKS_URL,
+        CENTRAL_OIDC_AUDIENCE:process.env.CENTRAL_OIDC_AUDIENCE,
+        CENTRAL_OIDC_REQUIRED_ROLE:process.env.CENTRAL_OIDC_REQUIRED_ROLE,
+        CENTRAL_ADMIN_AUTH_MODE:process.env.CENTRAL_ADMIN_AUTH_MODE,
+        CENTRAL_ADMIN_API_KEY:process.env.CENTRAL_ADMIN_API_KEY};
     let local:LocalEventsSyncService | undefined;
     let centralServer:Server | undefined;
     let tenantServer:Server | undefined;
+    let jwksServer:Server | undefined;
     try {
         process.env.TENANT_ID=tenantId;
         process.env.CENTRAL_AGENT_API_KEY=centralKey;
+
+        // Ephemeral mock identity issuer: actual Central JWT verification is
+        // exercised against the real Central Service, not bypassed in mocks.
+        const {privateKey,publicKey}=generateKeyPairSync('rsa',{modulusLength:2048});
+        const publicJwk=publicKey.export({format:'jwk'});
+        jwksServer=createServer((req,res)=>{
+            if(req.url!=='/realms/gtsp/protocol/openid-connect/certs'){
+                res.writeHead(404).end();
+                return;
+            }
+            res.setHeader('content-type','application/json');
+            res.end(JSON.stringify({keys:[{
+                ...publicJwk,kid:'integrated-cli-ci',alg:'RS256',use:'sig'
+            }]}));
+        });
+        jwksServer.listen(0,'127.0.0.1');
+        await once(jwksServer,'listening');
+        const identityAddress=jwksServer.address();
+        if(!identityAddress || typeof identityAddress==='string'){
+            throw Error('Ephemeral OIDC issuer did not bind');
+        }
+        const issuer='http://127.0.0.1:'+identityAddress.port+'/realms/gtsp';
+        const audience='gtsp-central-integration-ci';
+        process.env.CENTRAL_ADMIN_AUTH_MODE='oidc';
+        process.env.CENTRAL_OIDC_ISSUER=issuer;
+        process.env.CENTRAL_OIDC_JWKS_URL=issuer+'/protocol/openid-connect/certs';
+        process.env.CENTRAL_OIDC_AUDIENCE=audience;
+        process.env.CENTRAL_OIDC_REQUIRED_ROLE='CENTRAL_ADMIN';
+        delete process.env.CENTRAL_ADMIN_API_KEY;
+        const validOperatorToken=signOperatorJwt(privateKey,issuer,audience,['CENTRAL_ADMIN']);
+        const forbiddenOperatorToken=signOperatorJwt(privateKey,issuer,audience,['TENANT_ADMIN']);
+
         const centralHttp=await listen(central.app);
         centralServer=centralHttp.server;
         const tenantHttp=await listen(tenant.createApp(tenantId));
@@ -103,6 +142,25 @@ test('full three-service PostgreSQL to SQLite to PostgreSQL event sync, replay a
         const tp=tenantDb.getTenantPool(tenantId);
         await cp.query('INSERT INTO "tenants" ("id","name","databaseUrl") VALUES ($1,$2,$3)',
             [tenantId,'Synthetic CI tenant','nonsecret-config-placeholder']);
+        // A real Central CLI subprocess should administer the same synthetic
+        // tenant created for this event pipeline, with OIDC/JWKS verified by
+        // Central Service. No legacy Central Admin API key is used.
+        const listed=await runCentralCli(centralHttp.url,validOperatorToken);
+        assert.match(listed.stdout,/tenant_ci_qa/,
+            'Central CLI must list the tenant persisted in this PostgreSQL DB');
+        assert.doesNotMatch(listed.stdout+listed.stderr,/eyJ[A-Za-z0-9_-]{10,}/,
+            'Central operator JWT must not appear in normal CLI output');
+        await assert.rejects(
+            ()=>runCentralCli(centralHttp.url,forbiddenOperatorToken),
+            (error:unknown)=>{
+                const e=error as Error & {code?:number;stderr?:string;stdout?:string};
+                assert.equal(e.code,1,'Wrong realm role must fail the CLI process');
+                assert.match(e.stderr||'',/HTTP 403/);
+                assert.doesNotMatch((e.stdout||'')+(e.stderr||''),/eyJ[A-Za-z0-9_-]{10,}/);
+                return true;
+            }
+        );
+
         process.chdir(temp);
         local=new LocalEventsSyncService(tenantId,tenantHttp.url);
 
@@ -229,7 +287,7 @@ test('full three-service PostgreSQL to SQLite to PostgreSQL event sync, replay a
     } finally {
         local?.close();
         process.chdir(originalCwd);
-        await Promise.allSettled([stop(tenantServer),stop(centralServer),
+        await Promise.allSettled([stop(tenantServer),stop(centralServer),stop(jwksServer),
             centralDb.closeSystemPool(),tenantDb.closeAllTenantPools()]);
         rmSync(temp,{recursive:true,force:true});
         for(const [key,value] of Object.entries(previous)){
