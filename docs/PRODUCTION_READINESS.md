@@ -39,3 +39,11 @@ The initial CI jobs check tracked-file hygiene, dependency lockfile presence, cl
 - All six repositories remain **PRODUCTION NO-GO** pending separate approval, privacy/secret exposure remediation and independent end-to-end release gates.
 
 No live service, production database, or UIMS V1 source was changed.
+
+## 2026-11-23 — Bounded canonical SQLite flush and private-log guard (Draft)
+
+- The running service's canonical `LocalEventsSyncService.flushOutbox(batchSize)` no longer calls `SELECT * FROM outbox WHERE sent=0` and reads **every unsent record** into application memory. It now snapshots a SQLite `rowid` high-water mark and reads at most `batchSize` rows per SQL query, ordered by rowid. Failed and cross-tenant rows are examined once per invocation without looping forever; newly appended records are deferred to the next invocation.
+- The event payload is never included in the invalid-source diagnostic, even if the source serialization creates an undefined column value. The SQLite event is not acknowledged upstream if the outbox insert cannot be validated.
+- Windows-native SQLite regression fixtures cover a 35-event outbox with a 7-record query bound, an event appended during a flush, its deferred delivery on the next flush, and a deliberately malformed source fixture with a synthetic private-value sentinel that must not appear in captured error logs.
+- **Explicit scope:** This change is in the running `LocalEventsSyncService` only. The older manual `SyncService` CLI implementation still needs a separate bounded-paging/privacy review. Large-scale throughput, disk-full behavior, filesystem ACL/encryption, native backup/restore drills, power-loss fsync and off-host disaster recovery have **not** been accepted.
+- GitHub Actions provide isolated QA evidence, not production approval. Keep the feature in the Draft PR with no production deployment or merge until signed-off release gating.
