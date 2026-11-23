@@ -82,6 +82,11 @@ jobs:
         run: node dist/index.js --help
       - name: Windows agent actual process crash and restart QA
         run: npm run test:windows-process
+      - name: Pinned agentctl Windows unit regression suite
+        run: |
+          cd integration/agentctl
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm test
 
 
   full-sync-e2e:
