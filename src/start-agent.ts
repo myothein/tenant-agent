@@ -2,6 +2,7 @@ import { systemApi } from './system-api/client.js';
 import { config } from './config/tenant-agent.config.js';
 import { LocalEventsSyncService } from './services/sync-local-events.service.js';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { prepareAgentBackupDirectory, verifyAgentBackupDirectory } from './services/backup-storage-policy.js';
 
 function validateEndpoint(value: string, label: string) {
@@ -45,7 +46,6 @@ export async function startAgent(): Promise<void> {
     // One canonical agent loop owns polling + durable SQLite + central delivery.
     // Do not launch the separate legacy SyncService loop in parallel.
     const syncService=new LocalEventsSyncService(config.tenantId,config.tenantServiceUrl);
-    syncService.start(config.syncIntervalMs);
 
     const heartbeat = async () => {
         try {
@@ -65,7 +65,7 @@ export async function startAgent(): Promise<void> {
                 // Detect a directory redirected into the app via a symlink
                 // between startup and a periodic/shutdown backup.
                 const directory=verifyAgentBackupDirectory(backupDirectory,process.env.NODE_ENV);
-                const stamp=new Date().toISOString().replace(/[:.]/g,'-');
+                const stamp=new Date().toISOString().replace(/[:.]/g,'-')+'-'+randomUUID();
                 await syncService.backupTo(path.join(directory,'outbox-backup-'+stamp+'.db'));
                 return true;
             } catch {
@@ -75,6 +75,14 @@ export async function startAgent(): Promise<void> {
         })().finally(()=>{backupJob=null;});
         return backupJob;
     };
+    // A writable, independently verified recovery checkpoint must exist
+    // before the agent can acknowledge source events. Fail closed without
+    // delivering or marking events if startup backup creation is unavailable.
+    if (!(await backupOutbox())) {
+        syncService.close();
+        throw new Error('Verified startup SQLite snapshot is unavailable');
+    }
+    syncService.start(config.syncIntervalMs);
     const backupTimer=setInterval(()=>void backupOutbox(),60*60*1000);
     // Do NOT automatically delete acknowledged events on their creation date:
     // a recently delivered old event can be immediately deleted, defeating
