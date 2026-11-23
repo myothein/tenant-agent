@@ -183,3 +183,120 @@ test('Windows SQLite: canonical sync scheduler avoids overlaps and shuts down cl
         rmSync(directory,{recursive:true,force:true});
     }
 });
+
+
+test('Windows SQLite: foreign-tenant rows remain quarantined while own events still deliver', async () => {
+    const previousCwd = process.cwd();
+    const directory = mkdtempSync(path.join(tmpdir(), 'agent-foreign-outbox-'));
+    const envBefore = {
+        tenant: process.env.TENANT_ID,
+        url: process.env.SYSTEM_API_URL,
+        key: process.env.CENTRAL_AGENT_API_KEY
+    };
+    const originalFetch = globalThis.fetch;
+    let local: LocalEventsSyncService | undefined;
+    const posted: Array<{ id:string; tenantId:string }> = [];
+    try {
+        process.chdir(directory);
+        process.env.TENANT_ID = 'university-ci-a';
+        process.env.SYSTEM_API_URL = 'http://127.0.0.1:5000';
+        process.env.CENTRAL_AGENT_API_KEY = 'ci-only-tenant-a-credential-longer-than-32-bytes';
+        local = new LocalEventsSyncService('university-ci-a');
+
+        const ownId = randomUUID();
+        const foreignId = randomUUID();
+        const source = (id:string) => ({
+            id, tenant_code:'university-ci-a', agent_id:'tenant-service',
+            aggregate_type:'Subject', aggregate_id:'101',
+            event_type:'subject.created', payload:{id:101,name:'Synthetic-Subject'},
+            created_at:'2026-01-01T10:00:00.000Z',
+            occurred_at:'2026-01-01T10:00:00.000Z'
+        });
+        local.addToOutbox(source(ownId));
+        local.addToOutbox(source(foreignId));
+        // Simulate a pre-existing corrupted/misrouted SQLite row. The normal
+        // tenant-scoped source API cannot create this row.
+        const dbPath = path.join(directory,'data/outbox.db');
+        const db = new Database(dbPath);
+        try {
+            db.prepare('UPDATE outbox SET tenantId = ? WHERE id = ?')
+                .run('university-ci-b',foreignId);
+        } finally { db.close(); }
+
+        globalThis.fetch = async (_url,options) => {
+            const body = JSON.parse(String(options?.body)) as {id:string;tenantId:string};
+            posted.push({id:body.id,tenantId:body.tenantId});
+            return new Response(JSON.stringify({
+                success:true,status:'accepted',eventId:body.id
+            }),{status:201,headers:{'content-type':'application/json'}});
+        };
+        await assert.rejects(() => local!.flushOutbox(0), /Invalid outbox batch size/);
+        await assert.rejects(() => local!.flushOutbox(-1), /Invalid outbox batch size/);
+        assert.equal(await local.flushOutbox(),1);
+        assert.deepEqual(posted,[{id:ownId,tenantId:'university-ci-a'}]);
+        const rows = new Database(dbPath,{readonly:true});
+        try {
+            const foreign = rows.prepare('SELECT sent,status,retry_count FROM outbox WHERE id=?')
+                .get(foreignId) as {sent:number;status:string;retry_count:number};
+            const own = rows.prepare('SELECT sent,status FROM outbox WHERE id=?')
+                .get(ownId) as {sent:number;status:string};
+            assert.deepEqual(foreign,{sent:0,status:'pending',retry_count:0});
+            assert.deepEqual(own,{sent:1,status:'sent'});
+        } finally {rows.close();}
+    } finally {
+        globalThis.fetch=originalFetch;
+        if (envBefore.tenant === undefined) delete process.env.TENANT_ID;
+        else process.env.TENANT_ID=envBefore.tenant;
+        if (envBefore.url === undefined) delete process.env.SYSTEM_API_URL;
+        else process.env.SYSTEM_API_URL=envBefore.url;
+        if (envBefore.key === undefined) delete process.env.CENTRAL_AGENT_API_KEY;
+        else process.env.CENTRAL_AGENT_API_KEY=envBefore.key;
+        local?.close();
+        process.chdir(previousCwd);
+        rmSync(directory,{recursive:true,force:true});
+    }
+});
+
+test('Windows SQLite: legacy SyncService also refuses foreign-tenant replay', async () => {
+    const previousCwd=process.cwd();
+    const directory=mkdtempSync(path.join(tmpdir(),'agent-legacy-isolation-'));
+    const envBefore={
+        tenant:process.env.TENANT_ID,url:process.env.SYSTEM_API_URL,
+        key:process.env.CENTRAL_AGENT_API_KEY
+    };
+    const previousFetch=globalThis.fetch;
+    let sync:SyncService|undefined;
+    let networkCalls=0;
+    try {
+        process.chdir(directory);
+        process.env.TENANT_ID='university-ci-a';
+        process.env.SYSTEM_API_URL='http://127.0.0.1:5000';
+        process.env.CENTRAL_AGENT_API_KEY='ci-only-tenant-a-credential-longer-than-32-bytes';
+        sync=new SyncService();
+        const wrongId=randomUUID();
+        sync.addEvent({
+            id:wrongId,tenantId:'university-ci-b',agentId:'tenant-agent',
+            aggregate_type:'Subject',aggregate_id:'12',event_type:'subject.created',
+            payload:{name:'Wrong-Tenant'},occurredAt:'2026-01-01T00:00:00.000Z'
+        });
+        globalThis.fetch=async()=>{networkCalls++;throw Error('No foreign event delivery allowed');};
+        await assert.rejects(()=>sync!.flushOutbox(0),/Invalid outbox batch size/);
+        assert.equal(await sync.flushOutbox(),0);
+        assert.equal(networkCalls,0);
+        const row=sync.listEvents().find(x=>x.id===wrongId);
+        assert.ok(row);
+        assert.equal(row.sent,false);
+        assert.equal(row.retry_count,0);
+    } finally {
+        globalThis.fetch=previousFetch;
+        if(envBefore.tenant===undefined)delete process.env.TENANT_ID;
+        else process.env.TENANT_ID=envBefore.tenant;
+        if(envBefore.url===undefined)delete process.env.SYSTEM_API_URL;
+        else process.env.SYSTEM_API_URL=envBefore.url;
+        if(envBefore.key===undefined)delete process.env.CENTRAL_AGENT_API_KEY;
+        else process.env.CENTRAL_AGENT_API_KEY=envBefore.key;
+        sync?.close();
+        process.chdir(previousCwd);
+        rmSync(directory,{recursive:true,force:true});
+    }
+});
