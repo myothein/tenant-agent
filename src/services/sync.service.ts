@@ -32,6 +32,18 @@ export class SyncService {
         fs.mkdirSync("data", { recursive: true });
         this.db = new Database("data/outbox.db");
 
+        // The manual CLI shares the durable outbox with the canonical agent.
+        // Apply the same per-connection FULL-synchronous WAL policy; reject
+        // filesystems that cannot meet the expected persistence guarantees.
+        const journal = this.db.pragma('journal_mode = WAL', { simple: true });
+        this.db.pragma('synchronous = FULL');
+        this.db.pragma('busy_timeout = 5000');
+        if (String(journal).toLowerCase() !== 'wal' ||
+            this.db.pragma('synchronous', { simple: true }) !== 2) {
+            this.db.close();
+            throw new Error('Durable SQLite outbox mode is unavailable');
+        }
+
         // Create table if it does not exist
         this.db.prepare(`
       CREATE TABLE IF NOT EXISTS outbox (
