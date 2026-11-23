@@ -142,6 +142,11 @@ jobs:
           set -euo pipefail
           (cd integration/tenant-service && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
           (cd integration/central-service && npm ci --ignore-scripts --no-audit --no-fund && npm run build)
+      - name: Compile pinned Central CLI
+        run: |
+          cd integration/central-cli
+          npm ci --ignore-scripts --no-audit --no-fund
+          npm run build
       - name: Build agent with native SQLite binding
         shell: bash
         run: |
