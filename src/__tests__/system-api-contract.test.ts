@@ -97,3 +97,36 @@ test('Missing central scoped key fails closed before any event delivery', async 
         else process.env.TENANT_ID=priorTenant;
     }
 });
+
+
+test('cross-tenant Central event and heartbeat are blocked without any network call', async () => {
+    const priorTenant = process.env.TENANT_ID;
+    const priorFetch = globalThis.fetch;
+    let requests = 0;
+    process.env.TENANT_ID = 'university-ci-a';
+    globalThis.fetch = async () => {
+        requests++;
+        throw new Error('Unexpected Central API network call');
+    };
+    try {
+        const client = new SystemApiClient();
+        await assert.rejects(
+            () => client.sendEvent({...event, tenantId:'university-ci-b'}),
+            /Cross-tenant Central API operation rejected/
+        );
+        await assert.rejects(
+            () => client.sendHeartbeat({tenantId:'university-ci-b',sentAt:Date.now()}),
+            /Cross-tenant Central API operation rejected/
+        );
+        assert.equal(requests,0);
+        delete process.env.TENANT_ID;
+        await assert.rejects(
+            () => client.sendEvent(event), /Cross-tenant Central API operation rejected/
+        );
+        assert.equal(requests,0);
+    } finally {
+        globalThis.fetch = priorFetch;
+        if (priorTenant === undefined) delete process.env.TENANT_ID;
+        else process.env.TENANT_ID = priorTenant;
+    }
+});
