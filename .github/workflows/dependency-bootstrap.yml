@@ -126,6 +126,13 @@ jobs:
           ref: d423d9fee7f3d382be8072f85cd98fc64be087e3
           path: integration/central-service
           persist-credentials: false
+      - name: Checkout audited Central CLI revision
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/central-cli
+          ref: e3c78a06991c9c64c39a5d57f7297605aa37a3f9
+          path: integration/central-cli
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
