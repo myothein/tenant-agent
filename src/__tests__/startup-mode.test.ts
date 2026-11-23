@@ -46,6 +46,9 @@ test('production backup directory is explicit, absolute, pre-provisioned and out
     const external = path.join(dir, 'operator-backups');
     fs.mkdirSync(workdir);
     fs.mkdirSync(external);
+    const installed = path.join(dir, 'installed-agent');
+    const installBackup = path.join(installed, 'backups');
+    fs.mkdirSync(installBackup, { recursive: true });
     try {
         assert.throws(() => resolveAgentBackupDirectory(undefined, 'production', workdir),
             /requires TENANT_AGENT_BACKUP_DIR/);
@@ -62,6 +65,11 @@ test('production backup directory is explicit, absolute, pre-provisioned and out
             /Backup directory failed deployment safety checks/);
         assert.throws(() => prepareAgentBackupDirectory(workdir, 'production', workdir),
             /Backup directory failed deployment safety checks/);
+        // Windows services may start from System32 rather than the application
+        // install path; backup storage under the deployment is still forbidden.
+        assert.throws(() => prepareAgentBackupDirectory(
+            installBackup, 'production', workdir, installed
+        ), /Backup directory failed deployment safety checks/);
 
         const outside = prepareAgentBackupDirectory(external, 'production', workdir);
         assert.equal(outside, fs.realpathSync.native(external));
