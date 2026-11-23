@@ -132,6 +132,28 @@ test('full three-service PostgreSQL to SQLite to PostgreSQL event sync, replay a
         assert.equal(tenantHeaderDenied.status,403,
             'Tenant-service must reject client-provided tenant switching headers');
 
+        // A malicious replay using an existing UUID but mutated contents may not
+        // be acknowledged as a benign duplicate; the original persisted row
+        // must remain intact and should not be overwritten.
+        const payloadBefore=centralRow.rows[0].payload;
+        const collisionResponse=await fetch(centralHttp.url+'/api/v1/events',{
+            method:'POST',
+            headers:{authorization:'Bearer '+centralKey,'content-type':'application/json'},
+            body:JSON.stringify({
+                id:originalId,tenantId,agentId:'tenant-service',
+                event_type:'subject.created',aggregate_type:'Subject',
+                aggregate_id:String(first.id),
+                payload:{id:first.id,name:'Malicious changed payload in replay'},
+                occurredAt:'2026-01-01T00:00:00.000Z'
+            })
+        });
+        assert.equal(collisionResponse.status,409,
+            'Same UUID with altered payload must not be treated as duplicate success');
+        const unchanged=await cp.query('SELECT payload FROM events WHERE id=$1',[originalId]);
+        assert.equal(unchanged.rowCount,1);
+        assert.deepEqual(unchanged.rows[0].payload,payloadBefore,
+            'Central must never overwrite original event on collision');
+
         // Crash window: central wrote event, local sent flag was not committed.
         const replay=new Database(path.join(temp,'data/outbox.db'));
         try { replay.prepare("UPDATE outbox SET sent=0,status='pending' WHERE id=?").run(originalId); }
