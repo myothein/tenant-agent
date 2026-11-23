@@ -1,11 +1,14 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { once } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, generateKeyPairSync, sign as rsaSign, type KeyObject } from 'node:crypto';
 import { createRequire } from 'node:module';
 import { mkdtempSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { tmpdir } from 'node:os';
+import { createServer } from 'node:http';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import Database from 'better-sqlite3';
 import type { Server } from 'node:http';
 import { LocalEventsSyncService } from '../services/sync-local-events.service.js';
@@ -20,6 +23,39 @@ const tenantDb = load(path.join(root,'integration/tenant-service/dist/lib/db.js'
 const tenantId = 'tenant_ci_qa';
 const adminKey = 'ci-only-admin-credential-longer-than-32-bytes';
 const centralKey = 'ci-only-central-agent-credential-longer-than-32-bytes';
+
+const execFileAsync = promisify(execFile);
+const cliEntry = path.join(root,'integration/central-cli/dist/index.js');
+
+function signOperatorJwt(privateKey:KeyObject, issuer:string, audience:string, roles:string[]):string {
+    const encodedHeader=Buffer.from(JSON.stringify({
+        alg:'RS256',typ:'JWT',kid:'integrated-cli-ci'
+    })).toString('base64url');
+    const now=Math.floor(Date.now()/1000);
+    const encodedPayload=Buffer.from(JSON.stringify({
+        iss:issuer,aud:audience,sub:'synthetic-central-operator',
+        iat:now,exp:now+300,realm_access:{roles}
+    })).toString('base64url');
+    const unsigned=encodedHeader+'.'+encodedPayload;
+    return unsigned+'.'+rsaSign('RSA-SHA256',Buffer.from(unsigned),privateKey)
+        .toString('base64url');
+}
+
+async function runCentralCli(baseUrl:string, token:string) {
+    return execFileAsync(process.execPath,[cliEntry,'tenant','list'],{
+        cwd:root,
+        timeout:15_000,
+        env:{
+            ...process.env,
+            CENTRAL_API_URL:baseUrl+'/api/v1',
+            CENTRAL_AUTH_MODE:'oidc',
+            CENTRAL_OIDC_ACCESS_TOKEN:token,
+            CENTRAL_API_KEY:'',
+            CENTRAL_ALLOW_DEV_API_KEY:'false'
+        }
+    });
+}
+
 
 async function listen(app: {listen:(port:number,host:string)=>Server}) {
     const server = app.listen(0,'127.0.0.1');
