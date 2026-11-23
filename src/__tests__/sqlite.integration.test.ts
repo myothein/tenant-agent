@@ -300,3 +300,106 @@ test('Windows SQLite: legacy SyncService also refuses foreign-tenant replay', as
         rmSync(directory,{recursive:true,force:true});
     }
 });
+
+
+test('Windows SQLite: bounded outbox flush defers events added after its high-water mark', async () => {
+    const previousCwd = process.cwd();
+    const directory = mkdtempSync(path.join(tmpdir(), 'agent-bounded-outbox-'));
+    const previous = {
+        tenant: process.env.TENANT_ID,
+        url: process.env.SYSTEM_API_URL,
+        key: process.env.CENTRAL_AGENT_API_KEY
+    };
+    const priorFetch = globalThis.fetch;
+    let local: LocalEventsSyncService | undefined;
+    try {
+        process.chdir(directory);
+        process.env.TENANT_ID = 'ci-bounded-tenant';
+        process.env.SYSTEM_API_URL = 'http://127.0.0.1:5000';
+        process.env.CENTRAL_AGENT_API_KEY = 'ci-only-bounded-outbox-credential-longer-than-32-bytes';
+        local = new LocalEventsSyncService('ci-bounded-tenant');
+        const makeEvent = (id: string) => ({
+            id, tenant_code: 'ci-bounded-tenant', agent_id: 'tenant-service',
+            aggregate_type: 'Subject', aggregate_id: '42', event_type: 'subject.created',
+            payload: { id: 42, name: 'Synthetic only' },
+            created_at: '2026-01-01T00:00:00.000Z',
+            occurred_at: '2026-01-01T00:00:00.000Z'
+        });
+        const oldIds = Array.from({ length: 35 }, () => randomUUID());
+        const addedDuringDelivery = randomUUID();
+        const posted: string[] = [];
+        let injected = false;
+        for (const id of oldIds) local.addToOutbox(makeEvent(id));
+        globalThis.fetch = async (_url, options) => {
+            const event = JSON.parse(String(options?.body)) as { id: string };
+            posted.push(event.id);
+            if (!injected) {
+                injected = true;
+                local!.addToOutbox(makeEvent(addedDuringDelivery));
+            }
+            return new Response(JSON.stringify({
+                success: true, status: 'accepted', eventId: event.id
+            }), { status: 201, headers: { 'content-type': 'application/json' } });
+        };
+        assert.equal(await local.flushOutbox(7), oldIds.length);
+        assert.equal(posted.length, oldIds.length,
+            'A flush must read a bounded snapshot, not newly appended events');
+        assert.equal(posted.includes(addedDuringDelivery), false);
+        const view = new Database(path.join(directory, 'data/outbox.db'), { readonly: true });
+        try {
+            const item = view.prepare('SELECT sent, status FROM outbox WHERE id=?')
+                .get(addedDuringDelivery) as { sent: number; status: string };
+            assert.deepEqual(item, { sent: 0, status: 'pending' });
+            const sentCount = view.prepare('SELECT COUNT(*) AS n FROM outbox WHERE sent=1')
+                .get() as { n: number };
+            assert.equal(sentCount.n, oldIds.length);
+        } finally { view.close(); }
+        assert.equal(await local.flushOutbox(7), 1);
+        assert.equal(posted.at(-1), addedDuringDelivery);
+    } finally {
+        globalThis.fetch = priorFetch;
+        if (previous.tenant === undefined) delete process.env.TENANT_ID;
+        else process.env.TENANT_ID = previous.tenant;
+        if (previous.url === undefined) delete process.env.SYSTEM_API_URL;
+        else process.env.SYSTEM_API_URL = previous.url;
+        if (previous.key === undefined) delete process.env.CENTRAL_AGENT_API_KEY;
+        else process.env.CENTRAL_AGENT_API_KEY = previous.key;
+        local?.close();
+        process.chdir(previousCwd);
+        rmSync(directory, { recursive: true, force: true });
+    }
+});
+
+test('Windows SQLite: invalid outbox source never prints private event payload', () => {
+    const previousCwd = process.cwd();
+    const directory = mkdtempSync(path.join(tmpdir(), 'agent-private-log-'));
+    const priorError = console.error;
+    let local: LocalEventsSyncService | undefined;
+    const log: string[] = [];
+    try {
+        process.chdir(directory);
+        local = new LocalEventsSyncService('tenant_ci_qa');
+        const secretSentinel = 'PRIVATE_EVENT_PAYLOAD_MUST_NOT_APPEAR_IN_LOG';
+        const event = {
+            id: randomUUID(), tenant_code: 'tenant_ci_qa',
+            agent_id: 'tenant-service', aggregate_type: 'Subject',
+            aggregate_id: '42', event_type: 'subject.created',
+            payload: { privateValue: secretSentinel },
+            created_at: '2026-01-01T00:00:00.000Z',
+            occurred_at: '2026-01-01T00:00:00.000Z',
+            // Functions cannot be serialized as JSON; trigger the invalid
+            // record guard without introducing a real credential.
+            headers: (() => 'invalid fixture')
+        };
+        console.error = (...parts: unknown[]) => { log.push(parts.map(String).join(' ')); };
+        assert.throws(() => local!.addToOutbox(event), /Invalid outbox record/);
+        assert.equal(log.length, 1, 'Invalid event should produce one sanitized diagnostic');
+        assert.ok(!log.join(' ').includes(secretSentinel));
+        assert.ok(!log.join(' ').includes('privateValue'));
+    } finally {
+        console.error = priorError;
+        local?.close();
+        process.chdir(previousCwd);
+        rmSync(directory, { recursive: true, force: true });
+    }
+});
