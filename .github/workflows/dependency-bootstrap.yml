@@ -62,6 +62,13 @@ jobs:
         with:
           ref: ${{ github.head_ref }}
           persist-credentials: false
+      - name: Checkout pinned agentctl source for Windows interop QA
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/agentctl
+          ref: cf3b3c2ff733824f8c99438b9ff02063d3e6fb1d
+          path: integration/agentctl
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
