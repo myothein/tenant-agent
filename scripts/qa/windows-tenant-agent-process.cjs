@@ -62,7 +62,7 @@ async function start(urlTenant,urlCentral) {
   agent=spawn(process.execPath,[path.resolve('dist/index.js')],{
     cwd:root,windowsHide:true,stdio:['ignore','pipe','pipe'],
     env:{
-      ...process.env,TENANT_ID:tenant,TENANT_API_URL:urlTenant,SYSTEM_API_URL:urlCentral,
+      ...process.env,NODE_ENV:'test',TENANT_ID:tenant,TENANT_API_URL:urlTenant,SYSTEM_API_URL:urlCentral,
       TENANT_AGENT_API_KEY:tenantKey,CENTRAL_AGENT_API_KEY:centralKey,
       TENANT_SYNC_INTERVAL_MS:'1000',TENANT_HEARTBEAT_INTERVAL_MS:'1000'
     }
@@ -74,6 +74,20 @@ async function start(urlTenant,urlCentral) {
   }
   await delay(800);
   if(running.exitCode!==null)throw Error('Actual tenant-agent exited during startup');
+  // Source events may only be acknowledged after a verified SQLite recovery
+  // snapshot has been staged and published during service startup.
+  const backupDirectory=path.join(root,'backups');
+  await until(()=>fs.existsSync(backupDirectory) &&
+    fs.readdirSync(backupDirectory).some(name=>/^outbox-backup-.*\.db$/.test(name)),
+    'verified startup snapshot must exist before event transfer');
+  const candidate=fs.readdirSync(backupDirectory)
+    .filter(name=>/^outbox-backup-.*\.db$/.test(name)).sort().at(-1);
+  const verified=new Database(path.join(backupDirectory,candidate),{readonly:true,fileMustExist:true});
+  try{
+    assert.equal(verified.pragma('integrity_check',{simple:true}),'ok');
+    const schema=verified.prepare("SELECT count(*) AS n FROM sqlite_master WHERE name='outbox'").get();
+    assert.equal(schema.n,1);
+  }finally{verified.close();}
 }
 async function stop() {
   if(!agent)return;
