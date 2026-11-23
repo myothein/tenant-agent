@@ -48,6 +48,18 @@ export class LocalEventsSyncService {
         fs.mkdirSync("data", { recursive: true });
         this.outboxDb = new Database("data/outbox.db");
 
+        // A source event is acknowledged only after the SQLite insert commits.
+        // Require crash-recoverable WAL and a FULL-sync commit boundary; abort
+        // startup rather than silently accepting weaker durability settings.
+        const journal = this.outboxDb.pragma('journal_mode = WAL', { simple: true });
+        this.outboxDb.pragma('synchronous = FULL');
+        this.outboxDb.pragma('busy_timeout = 5000');
+        if (String(journal).toLowerCase() !== 'wal' ||
+            this.outboxDb.pragma('synchronous', { simple: true }) !== 2) {
+            this.outboxDb.close();
+            throw new Error('Durable SQLite outbox mode is unavailable');
+        }
+
         this.outboxDb.prepare(`
             CREATE TABLE IF NOT EXISTS outbox (
                                                   id TEXT PRIMARY KEY,
