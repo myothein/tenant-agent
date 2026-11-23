@@ -197,10 +197,11 @@ export class LocalEventsSyncService {
             0, 'pending', record.retry_count, record.event_version, record.headers
         ];
 
-        // 🔒 Guard rail (debug lifesaver)
+        // Never print the values array: it contains private event payloads
+        // and may contain authentication or student identity metadata.
         if (values.some(v => v === undefined)) {
-            Logger.error("[Outbox] Undefined value detected", values);
-            throw new Error("Undefined value in outbox insert");
+            Logger.error("[Outbox] Source event cannot be persisted (invalid field)");
+            throw new Error("Invalid outbox record; source was not acknowledged");
         }
 
         stmt.run(values);
@@ -231,26 +232,32 @@ export class LocalEventsSyncService {
         if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) {
             throw new Error('Invalid outbox batch size');
         }
-        const rows = this.outboxDb
-            .prepare(`
-                SELECT *
-                FROM outbox
-                WHERE sent = 0
-                ORDER BY createdAt ASC
-            `)
-            .all();
+        // A stable rowid high-water mark bounds each flush attempt, even if
+        // new records arrive while the network is slow. No unbounded .all().
+        const highWater = this.outboxDb.prepare(
+            'SELECT MAX(rowid) AS maxRowId FROM outbox WHERE sent = 0'
+        ).get() as { maxRowId: number | null };
+        if (highWater.maxRowId === null) return 0;
 
-        if (rows.length === 0) return 0;
-
-        console.log(`[Sync] Flushing ${rows.length} event(s)...`);
-
+        const page = this.outboxDb.prepare(
+            'SELECT rowid AS outboxRowId, id, tenantId, agentId, aggregate_type, aggregate_id, ' +
+            'event_type, payload, createdAt, occurredAt FROM outbox ' +
+            'WHERE sent = 0 AND rowid > ? AND rowid <= ? ORDER BY rowid ASC LIMIT ?'
+        );
+        let cursor = 0;
         let flushedCount = 0;
 
-        for (let i = 0; i < rows.length; i += batchSize) {
-            const batch = rows.slice(i, i + batchSize);
+        while (cursor < highWater.maxRowId) {
+            const batch = page.all(cursor, highWater.maxRowId, batchSize) as
+                Array<{ outboxRowId: number; id: string; tenantId: string;
+                    agentId: string; aggregate_type: string; aggregate_id: string;
+                    event_type: string; payload: string; createdAt: string;
+                    occurredAt: string }>;
+            if (batch.length === 0) break;
+            cursor = batch[batch.length - 1].outboxRowId;
 
             const results = await Promise.allSettled(
-                batch.map(async (row: any) => {
+                batch.map(async (row) => {
                     // A foreign-tenant row must stay safely queued for quarantine /
                     // recovery, never leave the local host under this agent identity.
                     if (row.tenantId !== this.tenantId ||
