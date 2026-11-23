@@ -5,6 +5,7 @@ import { v4 as uuid } from "uuid";
 import { config } from "../config/tenant-agent.config.js";
 import { systemApi } from "../system-api/client.js";
 import { Logger } from "../utils/logger.js";
+import { createVerifiedOutboxBackup } from './sqlite-verified-backup.js';
 
 export interface OutboxEvent {
     id?: string;
@@ -239,9 +240,9 @@ export class SyncService {
         }
     }
 
-    /** WAL-aware consistent backup of live SQLite data; never copy the opened db file directly. */
+    /** Stage, validate, and atomically publish a native SQLite backup. */
     async backupTo(destination: string): Promise<void> {
-        await this.db.backup(destination);
+        await createVerifiedOutboxBackup(this.db, destination);
     }
 
     /**
