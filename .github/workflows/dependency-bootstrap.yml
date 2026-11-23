@@ -113,14 +113,14 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: myothein/tenant-service
-          ref: f1359cabccbd79cf7a683879a11246b241bd21b1
+          ref: db138df1f65d3b39646106c884409129ec8f5f6d
           path: integration/tenant-service
           persist-credentials: false
       - name: Checkout exact audited central-service revision
         uses: actions/checkout@v4
         with:
           repository: myothein/central-service
-          ref: 26f068b862487cc9538d8a872381fac7ef82efe5
+          ref: d423d9fee7f3d382be8072f85cd98fc64be087e3
           path: integration/central-service
           persist-credentials: false
       - uses: actions/setup-node@v4
@@ -142,7 +142,7 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p /tmp/ums-integration-migrations
-          URL=https://raw.githubusercontent.com/myothein/db-helper/bfae1246e28a43626e00627b9b812af579af4ab3
+          URL=https://raw.githubusercontent.com/myothein/db-helper/cd99b4508ba4674110484527525ad9b172618b4a
           curl -fsSL --retry 3 "$URL/prisma/system/migrations/001_init_system_db/migration.sql" -o /tmp/ums-integration-migrations/system.sql
           curl -fsSL --retry 3 "$URL/prisma/tenant/migrations/20260106105615_001_tenant_init/migration.sql" -o /tmp/ums-integration-migrations/tenant.sql
           curl -fsSL --retry 3 "$URL/prisma/tenant/migrations/20260107_add_local_events/migration.sql" -o /tmp/ums-integration-migrations/local_events.sql
