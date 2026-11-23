@@ -53,7 +53,11 @@ test('exactly six audited source checkouts with immutable SHA and no persisted t
     assert.equal(match[2],expected[match[1]],'Unaudited Git ref for '+match[1]);
   }
   for(const name of names){
-    assert.match(privateJob,new RegExp('^            '+name+'});
+    assert.match(privateJob,new RegExp('^            '+name+'$','m'));
+    // Verify the here-doc matches each immutable checkout ref.
+    assert.match(privateJob,new RegExp('^          '+name+' '+expected[name]+'$','m'));
+  }
+});
 
 test('every external GitHub action is pinned to a full immutable commit SHA',()=>{
   const uses=[...normalize(yml).matchAll(/^\s+-?\s*uses: ([^\s#]+)/gm)].map(m=>m[1]);
@@ -62,7 +66,7 @@ test('every external GitHub action is pinned to a full immutable commit SHA',()=
     'Unpinned or external action');
 });
 
-test('privileged source scan blocks credential files and runtime archives without showing contents',()=>{
+test('privileged scan rejects tracked secrets and backup archives',()=>{
   assert.match(privateJob,/git -C "snapshot\/\$name" ls-files -z/);
   assert.match(privateJob,/\.npmrc\|\*\/\.npmrc/);
   assert.match(privateJob,/\*\.pem\|\*\.p12\|\*\.pfx\|\*\.key/);
@@ -76,52 +80,6 @@ test('privileged source scan blocks credential files and runtime archives withou
   assert.match(privateJob,/--exclude='\*\.backup'/);
   assert.match(buildJob,/\(mybackup\|backups\)/);
   assert.match(buildJob,/\(pem\|p12\|pfx\|key\|dump\|backup\|db\|sqlite\|sqlite3\)/);
-});
-
-test('source and build jobs are isolated through short-lived token-free artifact',()=>{
-  assert.match(privateJob,/--exclude=\.git/);
-  assert.match(privateJob,/--exclude='\.env'/);
-  assert.match(privateJob,/--exclude='\*\.db'/);
-  assert.match(privateJob,/retention-days: 1/);
-  assert.match(buildJob,/needs: fetch-audited-sources/);
-  assert.match(buildJob,/tar -tzf/);
-  assert.match(buildJob,/tar -xzf/);
-  assert.match(buildJob,/npm ci --ignore-scripts/);
-  assert.match(buildJob,/node-version: '22'/);
-  assert.match(yml,/^permissions:\n  contents: read/m);
-});
-,'m'));
-    // The verified pin must match BOTH checkout ref and the fail-closed here-doc.
-    assert.match(privateJob,new RegExp('^          '+name+' '+expected[name]+'});
-
-test('every external GitHub action is pinned to a full immutable commit SHA',()=>{
-  const uses=[...normalize(yml).matchAll(/^\s+-?\s*uses: ([^\s#]+)/gm)].map(m=>m[1]);
-  assert.ok(uses.length>=10);
-  assert.ok(uses.every(a=>/^[a-z0-9-]+\/[a-z0-9-]+@[a-f0-9]{40}$/.test(a)),
-    'Unpinned or external action');
-});
-
-test('source and build jobs are isolated through short-lived token-free artifact',()=>{
-  assert.match(privateJob,/--exclude=\.git/);
-  assert.match(privateJob,/--exclude='\.env'/);
-  assert.match(privateJob,/--exclude='\*\.db'/);
-  assert.match(privateJob,/retention-days: 1/);
-  assert.match(buildJob,/needs: fetch-audited-sources/);
-  assert.match(buildJob,/tar -tzf/);
-  assert.match(buildJob,/tar -xzf/);
-  assert.match(buildJob,/npm ci --ignore-scripts/);
-  assert.match(buildJob,/node-version: '22'/);
-  assert.match(yml,/^permissions:\n  contents: read/m);
-});
-,'m'));
-  }
-});
-
-test('every external GitHub action is pinned to a full immutable commit SHA',()=>{
-  const uses=[...normalize(yml).matchAll(/^\s+-?\s*uses: ([^\s#]+)/gm)].map(m=>m[1]);
-  assert.ok(uses.length>=10);
-  assert.ok(uses.every(a=>/^[a-z0-9-]+\/[a-z0-9-]+@[a-f0-9]{40}$/.test(a)),
-    'Unpinned or external action');
 });
 
 test('source and build jobs are isolated through short-lived token-free artifact',()=>{
