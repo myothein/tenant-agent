@@ -489,3 +489,75 @@ test('Windows SQLite: manual sync bounds memory and isolates malformed JSON', as
         rmSync(dir, { recursive: true, force: true });
     }
 });
+
+
+test('Windows SQLite: WAL FULL durability survives close/reopen and native backup', async () => {
+    const cwd = process.cwd();
+    const temp = mkdtempSync(path.join(tmpdir(), 'agent-full-sync-'));
+    let local: LocalEventsSyncService | undefined;
+    let legacy: SyncService | undefined;
+    try {
+        process.chdir(temp);
+        local = new LocalEventsSyncService('tenant_ci_qa');
+        const live = (local as unknown as { outboxDb: Database.Database }).outboxDb;
+        assert.equal(live.pragma('journal_mode', { simple: true }), 'wal');
+        assert.equal(live.pragma('synchronous', { simple: true }), 2,
+            'Source acknowledgements require SQLite synchronous FULL');
+        assert.ok(Number(live.pragma('busy_timeout', { simple: true })) >= 5000);
+
+        const id = randomUUID();
+        local.addToOutbox({
+            id, tenant_code: 'tenant_ci_qa', agent_id: 'tenant-service',
+            aggregate_type: 'Subject', aggregate_id: '9001',
+            event_type: 'subject.created', payload: { value: 'synthetic-only' },
+            created_at: '2020-01-01T00:00:00.000Z',
+            occurred_at: '2020-01-01T00:00:00.000Z'
+        });
+        const snapshotPath = path.join(temp, 'verified-durable-outbox.db');
+        await local.backupTo(snapshotPath);
+        local.close();
+        local = undefined;
+
+        // A new process must be able to reopen a previously acknowledged
+        // source event without changing its original UUID or pending state.
+        local = new LocalEventsSyncService('tenant_ci_qa');
+        const reopened = (local as unknown as { outboxDb: Database.Database }).outboxDb;
+        assert.equal(reopened.pragma('journal_mode', { simple: true }), 'wal');
+        assert.equal(reopened.pragma('synchronous', { simple: true }), 2);
+        const persisted = reopened.prepare(
+            'SELECT id,tenantId,sent,status,payload FROM outbox WHERE id=?'
+        ).get(id) as {
+            id: string; tenantId: string; sent: number; status: string; payload: string
+        };
+        assert.equal(persisted.id, id);
+        assert.equal(persisted.tenantId, 'tenant_ci_qa');
+        assert.equal(persisted.sent, 0);
+        assert.equal(persisted.status, 'pending');
+        assert.deepEqual(JSON.parse(persisted.payload), { value: 'synthetic-only' });
+        local.close();
+        local = undefined;
+
+        // Legacy/manual commands use the same durable file and FULL-sync
+        // connection policy: switching entrypoints must not lower durability.
+        legacy = new SyncService();
+        const manual = (legacy as unknown as { db: Database.Database }).db;
+        assert.equal(manual.pragma('journal_mode', { simple: true }), 'wal');
+        assert.equal(manual.pragma('synchronous', { simple: true }), 2);
+        legacy.close();
+        legacy = undefined;
+
+        const backup = new Database(snapshotPath, { readonly: true });
+        try {
+            assert.equal(backup.pragma('integrity_check', { simple: true }), 'ok');
+            const row = backup.prepare('SELECT id,sent FROM outbox WHERE id=?')
+                .get(id) as { id: string; sent: number };
+            assert.equal(row.id, id);
+            assert.equal(row.sent, 0);
+        } finally { backup.close(); }
+    } finally {
+        local?.close();
+        legacy?.close();
+        process.chdir(cwd);
+        rmSync(temp, { recursive: true, force: true });
+    }
+});
