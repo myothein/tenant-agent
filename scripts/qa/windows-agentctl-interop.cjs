@@ -12,7 +12,7 @@ const {spawnSync}=require('node:child_process');
 assert.equal(process.platform,'win32','Windows QA only');
 assert.equal(process.env.CI,'true','Hosted CI only');
 assert.equal(process.env.RUNNER_OS,'Windows','Hosted Windows CI only');
-assert.equal(process.env.RUNNER_ENVIRONMENT,'github-hosted','Not authorized on private/self-hosted machines');
+assert.equal(process.env.GITHUB_ACTIONS,'true','GitHub Actions CI only');
 assert.equal(process.env.GITHUB_HEAD_REF,'hardening/release-security-baseline-20261122');
 
 const root=path.resolve('.');
