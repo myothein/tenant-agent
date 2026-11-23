@@ -85,6 +85,9 @@ jobs:
       TENANT_ID: tenant_ci_qa
       TENANT_DATABASE_URL_TEMPLATE: 'postgresql://ci_qa:ci_only_password@127.0.0.1:5432/{tenant}'
       SYSTEM_DATABASE_URL: 'postgresql://ci_qa:ci_only_password@127.0.0.1:5432/central_ci_qa'
+      NODE_ENV: test
+      TENANT_ADMIN_AUTH_MODE: legacy
+      TENANT_ALLOW_DEV_API_KEY: 'true'
       TENANT_ADMIN_API_KEY: ci-only-admin-credential-longer-than-32-bytes
       TENANT_AGENT_API_KEY: ci-only-agent-credential-longer-than-32-bytes
       CENTRAL_AGENT_API_KEY: ci-only-central-agent-credential-longer-than-32-bytes
