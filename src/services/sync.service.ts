@@ -94,6 +94,9 @@ export class SyncService {
      * Flush unsent events to central system
      */
     async flushOutbox(batchSize = 5): Promise<number> {
+        if (!Number.isSafeInteger(batchSize) || batchSize < 1 || batchSize > 100) {
+            throw new Error('Invalid outbox batch size');
+        }
         const unsent: any[] = this.db
             .prepare("SELECT * FROM outbox WHERE sent = 0")
             .all()
@@ -112,6 +115,11 @@ export class SyncService {
 
             const results = await Promise.allSettled(
                 batch.map(async (event) => {
+                    if (!process.env.TENANT_ID ||
+                        event.tenantId !== process.env.TENANT_ID) {
+                        Logger.error('[Sync] Cross-tenant outbox event blocked before network delivery');
+                        return false;
+                    }
                     if (!event.tenantId || !event.event_type || !event.payload) {
                         Logger.warn(`[Sync] Skipping event ${event.id} — missing required fields`);
                         return false;
