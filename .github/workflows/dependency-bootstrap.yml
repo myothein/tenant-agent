@@ -80,6 +80,8 @@ jobs:
         run: npm run test:sqlite
       - name: Verify CLI entrypoint without starting service
         run: node dist/index.js --help
+      - name: Windows agent actual process crash and restart QA
+        run: npm run test:windows-process
 
 
   full-sync-e2e:
