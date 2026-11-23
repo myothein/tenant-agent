@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { SystemApiClient, CentralEventEnvelope } from '../system-api/client.js';
+import { SystemApiClient, CentralEventEnvelope, resolveSystemApiBaseUrl } from '../system-api/client.js';
 
 const event: CentralEventEnvelope = {
     id: '123e4567-e89b-42d3-a456-426614174002', tenantId:'university-ci-a',
@@ -42,6 +42,20 @@ async function fakeSend(status: number, responseBody: object, token?: string) {
         else process.env.TENANT_ID=priorTenant;
     }
 }
+
+test('Central API URL must be a canonical HTTPS or loopback origin, not an arbitrary path or query', () => {
+    assert.equal(resolveSystemApiBaseUrl('https://central.example/api/v1/'), 'https://central.example');
+    assert.equal(resolveSystemApiBaseUrl('https://central.example'), 'https://central.example');
+    assert.equal(resolveSystemApiBaseUrl('http://127.0.0.1:5000/api/v1'),
+        'http://127.0.0.1:5000');
+    for (const url of [
+        'https://central.example/other', 'https://central.example/api/v1?token=leak',
+        'https://central.example/#fragment', 'https://user:password@central.example',
+        'http://central.example', 'file:///etc/passwd', 'not-a-url'
+    ]) {
+        assert.throws(() => resolveSystemApiBaseUrl(url), /SYSTEM_API_URL/);
+    }
+});
 
 test('Central v1 contract posts original event id and aggregate fields with scoped bearer token', async () => {
     const sent=await fakeSend(201,{success:true,status:'accepted',eventId:event.id});
