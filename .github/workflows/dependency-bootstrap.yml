@@ -66,7 +66,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: myothein/agentctl
-          ref: 9e6a705eb052d17ee07b53f7aaee65776b9bf916
+          ref: dfbe9954b27cbf14ae44173a80ca23e72199acb3
           path: integration/agentctl
           persist-credentials: false
       - uses: actions/setup-node@v4
