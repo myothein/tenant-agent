@@ -1,8 +1,8 @@
 import { systemApi } from './system-api/client.js';
 import { config } from './config/tenant-agent.config.js';
 import { LocalEventsSyncService } from './services/sync-local-events.service.js';
-import fs from 'fs-extra';
 import path from 'node:path';
+import { prepareAgentBackupDirectory, verifyAgentBackupDirectory } from './services/backup-storage-policy.js';
 
 function validateEndpoint(value: string, label: string) {
     let url: URL;
@@ -35,6 +35,13 @@ export async function startAgent(): Promise<void> {
         }
     }
 
+    // Before beginning delivery, require a non-repository, pre-provisioned
+    // backup directory on production. Do not attempt to set NTFS ACLs here;
+    // their independent review remains an explicit release gate.
+    const backupDirectory = prepareAgentBackupDirectory(
+        process.env.TENANT_AGENT_BACKUP_DIR, process.env.NODE_ENV
+    );
+
     // One canonical agent loop owns polling + durable SQLite + central delivery.
     // Do not launch the separate legacy SyncService loop in parallel.
     const syncService=new LocalEventsSyncService(config.tenantId,config.tenantServiceUrl);
@@ -55,8 +62,9 @@ export async function startAgent(): Promise<void> {
         if (backupJob) return backupJob;
         backupJob=(async()=>{
             try {
-                const directory=path.resolve('backups');
-                await fs.ensureDir(directory);
+                // Detect a directory redirected into the app via a symlink
+                // between startup and a periodic/shutdown backup.
+                const directory=verifyAgentBackupDirectory(backupDirectory,process.env.NODE_ENV);
                 const stamp=new Date().toISOString().replace(/[:.]/g,'-');
                 await syncService.backupTo(path.join(directory,'outbox-backup-'+stamp+'.db'));
                 return true;
