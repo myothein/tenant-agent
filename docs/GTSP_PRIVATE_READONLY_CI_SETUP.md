@@ -20,6 +20,23 @@ The privileged job performs only fixed revision/tree/file checks and packages an
 
 The ordinary nonsecret pull-request CI also runs `node --test scripts/qa/private-ci-policy.test.cjs` to enforce the trigger/actor/reference, exact source pins, read-only scope, no persisted credentials and token-free second job. This is a **static security guard**, not actual GitHub App authentication or private checkout acceptance.
 
+## Prepared immutable source snapshot — 2026-11-23
+
+The proposed owner-triggered private CI uses these exact audited commits. This is a **snapshot**, not an automatic pointer to Draft PR HEADs:
+
+| Component | Pinned commit |
+| --- | --- |
+| central-service | `25618c6982e1c9616e9f870c764a223629c82c8a` |
+| tenant-service | `eb031e08ed1137115fde5e7865a50ea498ba135d` |
+| db-helper | `b45452c9eead28d1888c68d16b634e6186e95bce` |
+| tenant-agent | `5fa9371496b65dc91149f40685f9f8671695e518` |
+| agentctl | `67d7bf4d7348ae19d9544f8edcbea5a8038052d8` |
+| central-cli | `212eec6ae12ecd8e856db9b4a22fead6ce1b3a6b` |
+
+These source revisions had passing individual GitHub Actions CI before this manual-workflow update. The `tenant-agent` pin intentionally targets the audited source before later edits to this workflow and its static policy tests; a snapshot must not use an unreviewed floating branch ref. **New commits must be separately reviewed before updating pins.**
+
+The privileged checkout job now checks NUL-delimited tracked paths, rejects environment configuration, authentication material, SQLite journals and database backup archives, and emits category-only errors instead of filenames or values. The artifact creation also excludes sensitive file patterns, and the unprivileged extractor checks for the same archive hazards. These safeguards are **source-level/static only** until the owner authorizes the protected workflow and exercises it against private repositories. Do not use a green ordinary PR CI job as proof that private checkout or credential revocation has succeeded.
+
 ## Manual owner actions that are still required
 
 1. Review and authorize the six-repo public `.env` exposure and tracked SQLite files, determine which historical credentials are live, and rotate/revoke them using the issuing services. Investigate possible historical data access. Do not post values in tickets or PRs.
