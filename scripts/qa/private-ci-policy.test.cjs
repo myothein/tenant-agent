@@ -6,12 +6,12 @@ const path=require('node:path');
 const yml=fs.readFileSync(path.resolve(__dirname,'../../.github/workflows/private-readonly-ci.yml'),'utf8');
 const names=['central-service','tenant-service','db-helper','tenant-agent','agentctl','central-cli'];
 const expected={
-  'central-service':'d423d9fee7f3d382be8072f85cd98fc64be087e3',
-  'tenant-service':'db138df1f65d3b39646106c884409129ec8f5f6d',
-  'db-helper':'cd99b4508ba4674110484527525ad9b172618b4a',
-  'tenant-agent':'ce06a973dfd3bde7603c604d06e5b25be1102a98',
+  'central-service':'25618c6982e1c9616e9f870c764a223629c82c8a',
+  'tenant-service':'eb031e08ed1137115fde5e7865a50ea498ba135d',
+  'db-helper':'b45452c9eead28d1888c68d16b634e6186e95bce',
+  'tenant-agent':'5fa9371496b65dc91149f40685f9f8671695e518',
   'agentctl':'6738bf136fc2f5e8a8e5d192ca8343160642ca9c',
-  'central-cli':'e3c78a06991c9c64c39a5d57f7297605aa37a3f9'
+  'central-cli':'212eec6ae12ecd8e856db9b4a22fead6ce1b3a6b'
 };
 const [privateJob,buildJob]=yml.split(/^  build-without-private-token:/m);
 const normalize=text=>text.replace(/\r\n/g,'\n');
@@ -53,7 +53,67 @@ test('exactly six audited source checkouts with immutable SHA and no persisted t
     assert.equal(match[2],expected[match[1]],'Unaudited Git ref for '+match[1]);
   }
   for(const name of names){
-    assert.match(privateJob,new RegExp('^            '+name+'$','m'));
+    assert.match(privateJob,new RegExp('^            '+name+'});
+
+test('every external GitHub action is pinned to a full immutable commit SHA',()=>{
+  const uses=[...normalize(yml).matchAll(/^\s+-?\s*uses: ([^\s#]+)/gm)].map(m=>m[1]);
+  assert.ok(uses.length>=10);
+  assert.ok(uses.every(a=>/^[a-z0-9-]+\/[a-z0-9-]+@[a-f0-9]{40}$/.test(a)),
+    'Unpinned or external action');
+});
+
+test('privileged source scan blocks credential files and runtime archives without showing contents',()=>{
+  assert.match(privateJob,/git -C "snapshot\/\$name" ls-files -z/);
+  assert.match(privateJob,/\.npmrc\|\*\/\.npmrc/);
+  assert.match(privateJob,/\*\.pem\|\*\.p12\|\*\.pfx\|\*\.key/);
+  assert.match(privateJob,/\*\.db-\*/);
+  assert.match(privateJob,/\*\.dump\|\*\.backup/);
+  assert.match(privateJob,/Audited source tracks authentication material/);
+  assert.match(privateJob,/Audited source tracks runtime or backup artifacts/);
+  assert.doesNotMatch(privateJob,/grep -Ev/);
+  assert.match(privateJob,/--exclude='\.npmrc'/);
+  assert.match(privateJob,/--exclude='\*\.key'/);
+  assert.match(privateJob,/--exclude='\*\.backup'/);
+  assert.match(buildJob,/\(mybackup\|backups\)/);
+  assert.match(buildJob,/\(pem\|p12\|pfx\|key\|dump\|backup\|db\|sqlite\|sqlite3\)/);
+});
+
+test('source and build jobs are isolated through short-lived token-free artifact',()=>{
+  assert.match(privateJob,/--exclude=\.git/);
+  assert.match(privateJob,/--exclude='\.env'/);
+  assert.match(privateJob,/--exclude='\*\.db'/);
+  assert.match(privateJob,/retention-days: 1/);
+  assert.match(buildJob,/needs: fetch-audited-sources/);
+  assert.match(buildJob,/tar -tzf/);
+  assert.match(buildJob,/tar -xzf/);
+  assert.match(buildJob,/npm ci --ignore-scripts/);
+  assert.match(buildJob,/node-version: '22'/);
+  assert.match(yml,/^permissions:\n  contents: read/m);
+});
+,'m'));
+    // The verified pin must match BOTH checkout ref and the fail-closed here-doc.
+    assert.match(privateJob,new RegExp('^          '+name+' '+expected[name]+'});
+
+test('every external GitHub action is pinned to a full immutable commit SHA',()=>{
+  const uses=[...normalize(yml).matchAll(/^\s+-?\s*uses: ([^\s#]+)/gm)].map(m=>m[1]);
+  assert.ok(uses.length>=10);
+  assert.ok(uses.every(a=>/^[a-z0-9-]+\/[a-z0-9-]+@[a-f0-9]{40}$/.test(a)),
+    'Unpinned or external action');
+});
+
+test('source and build jobs are isolated through short-lived token-free artifact',()=>{
+  assert.match(privateJob,/--exclude=\.git/);
+  assert.match(privateJob,/--exclude='\.env'/);
+  assert.match(privateJob,/--exclude='\*\.db'/);
+  assert.match(privateJob,/retention-days: 1/);
+  assert.match(buildJob,/needs: fetch-audited-sources/);
+  assert.match(buildJob,/tar -tzf/);
+  assert.match(buildJob,/tar -xzf/);
+  assert.match(buildJob,/npm ci --ignore-scripts/);
+  assert.match(buildJob,/node-version: '22'/);
+  assert.match(yml,/^permissions:\n  contents: read/m);
+});
+,'m'));
   }
 });
 
