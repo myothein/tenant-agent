@@ -33,6 +33,15 @@ export function resolveSystemApiBaseUrl(configured: string): string {
     return url.origin;
 }
 
+/** An agent process may only forward data for its deployment-pinned tenant. */
+export function assertAgentTenant(tenantId: unknown): void {
+    const configured = process.env.TENANT_ID;
+    if (!configured || !/^[A-Za-z0-9_-]{1,64}$/.test(configured) ||
+        tenantId !== configured) {
+        throw new Error('Cross-tenant Central API operation rejected');
+    }
+}
+
 /**
  * Scoped client for Central Service. The old on-disk token fallback is deliberately
  * NOT used for event delivery. Inject CENTRAL_AGENT_API_KEY securely at runtime.
@@ -53,8 +62,11 @@ export class SystemApiClient {
         return 'Bearer ' + value;
     }
     private async request(path: string, options: RequestInit = {}, agentAuth = false): Promise<Response> {
-        const headers = { 'content-type':'application/json', ...(agentAuth ?
-            { authorization: this.agentAuthorization() } : {}), ...(options.headers ?? {}) };
+        // Ensure caller-supplied headers can never override the scoped agent
+        // credential after it has been validated.
+        const headers = new Headers(options.headers);
+        headers.set('content-type', 'application/json');
+        if (agentAuth) headers.set('authorization', this.agentAuthorization());
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), this.timeoutMs);
         try {
@@ -78,13 +90,15 @@ export class SystemApiClient {
         await response.text();
     }
     async sendHeartbeat(payload: { tenantId:string; sentAt:number }): Promise<void> {
-        // Central currently returns 501 here; preserve heartbeat as unsuccessful.
+        assertAgentTenant(payload.tenantId);
+        // The central endpoint alone decides whether its response is durable.
         const response = await this.request('/api/v1/heartbeats', {
             method:'POST', body:JSON.stringify(payload)
         }, true);
         await response.text();
     }
     async sendEvent(event: CentralEventEnvelope): Promise<void> {
+        assertAgentTenant(event.tenantId);
         const response = await this.request('/api/v1/events', {
             method:'POST', body:JSON.stringify(event)
         }, true);
