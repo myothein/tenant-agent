@@ -1,5 +1,8 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const installationRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
 /**
  * Runtime backups contain tenant data. Production must use an administrator-
@@ -37,15 +40,17 @@ function isWithin(directory: string, base: string): boolean {
 export function verifyAgentBackupDirectory(
     directory: string,
     environment: string | undefined = process.env.NODE_ENV,
-    workingDirectory: string = process.cwd()
+    workingDirectory: string = process.cwd(),
+    installedDirectory: string = installationRoot
 ): string {
     try {
         if (!fs.statSync(directory).isDirectory()) throw new Error('Not a directory');
         const resolved = fs.realpathSync.native(directory);
         if (environment === 'production') {
             const working = fs.realpathSync.native(workingDirectory);
-            if (isWithin(resolved, working)) {
-                throw new Error('Backup directory within application working tree');
+            const installed = fs.realpathSync.native(installedDirectory);
+            if (isWithin(resolved, working) || isWithin(resolved, installed)) {
+                throw new Error('Backup directory within application or installation tree');
             }
         }
         return resolved;
@@ -59,11 +64,12 @@ export function verifyAgentBackupDirectory(
 export function prepareAgentBackupDirectory(
     configured: string | undefined,
     environment: string | undefined = process.env.NODE_ENV,
-    workingDirectory: string = process.cwd()
+    workingDirectory: string = process.cwd(),
+    installedDirectory: string = installationRoot
 ): string {
     const directory = resolveAgentBackupDirectory(configured, environment, workingDirectory);
     if (environment !== 'production') {
         fs.mkdirSync(directory, { recursive: true });
     }
-    return verifyAgentBackupDirectory(directory, environment, workingDirectory);
+    return verifyAgentBackupDirectory(directory, environment, workingDirectory, installedDirectory);
 }
