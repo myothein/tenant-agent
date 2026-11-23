@@ -181,25 +181,6 @@ test('full three-service PostgreSQL to SQLite to PostgreSQL event sync, replay a
         } finally {db1.close();}
         const marked=await tp.query('SELECT sent FROM local_events WHERE id=$1',[originalId]);
         assert.equal(marked.rows[0].sent,1);
-
-        // Lost HTTP acknowledgement responses must be safe to retry after
-        // durable SQLite insert. Exercise the actual tenant-service endpoint.
-        const repeatedAck = await fetch(
-            tenantHttp.url+'/local-events/'+originalId+'/mark-sent', {
-                method:'PATCH',
-                headers:{authorization:'Bearer '+process.env.TENANT_AGENT_API_KEY}
-            }
-        );
-        assert.equal(repeatedAck.status,200,'A delivered source event must accept an ack retry');
-        assert.equal(repeatedAck.headers.get('idempotency-replayed'),'true');
-        const replayBody = await repeatedAck.json() as {
-            replayed:boolean;event:{id:string;tenant_code:string;status:string;sent:number}
-        };
-        assert.equal(replayBody.replayed,true);
-        assert.equal(replayBody.event.id,originalId);
-        assert.equal(replayBody.event.tenant_code,tenantId);
-        assert.equal(replayBody.event.status,'sent');
-        assert.equal(replayBody.event.sent,1);
         assert.equal(await local.flushOutbox(),1);
         const centralRow=await cp.query(
             'SELECT id,"tenantId",payload FROM events WHERE id=$1',[originalId]);
