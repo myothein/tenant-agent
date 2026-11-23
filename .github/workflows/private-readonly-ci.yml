@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   fetch-audited-sources:
-    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'myothein/tenant-agent' && github.ref == 'refs/heads/main' && inputs.approval == 'AUTHORIZE-READONLY-QA' }}
+    if: ${{ github.event_name == 'workflow_dispatch' && github.repository == 'myothein/tenant-agent' && github.actor == 'myothein' && github.ref == 'refs/heads/main' && inputs.approval == 'AUTHORIZE-READONLY-QA' }}
     runs-on: ubuntu-latest
     environment: gtsp-private-ci
     timeout-minutes: 12
