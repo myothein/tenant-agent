@@ -5,6 +5,7 @@ import { config } from "../config/tenant-agent.config.js";
 import { Logger } from "../utils/logger.js";
 import { tenantAgentAuthHeaders, toOutboxRecord } from "./event-sync-contract.js";
 import { systemApi } from "../system-api/client.js"; // adjust path
+import { createVerifiedOutboxBackup } from './sqlite-verified-backup.js';
 
 /* ============================
    Types
@@ -88,9 +89,9 @@ export class LocalEventsSyncService {
         this.outboxDb.close();
     }
 
-    /** SQLite native backup is WAL-aware; never copy a live database file directly. */
+    /** Stage, validate, and atomically publish a native SQLite backup. */
     async backupTo(destination: string): Promise<void> {
-        await this.outboxDb.backup(destination);
+        await createVerifiedOutboxBackup(this.outboxDb, destination);
     }
 
     /** Never delete an event that has not been acknowledged by the central server. */
