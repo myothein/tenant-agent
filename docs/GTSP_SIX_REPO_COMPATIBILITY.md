@@ -12,7 +12,7 @@
 | tenant-service | `db138df1f65d3b39646106c884409129ec8f5f6d` | https://github.com/myothein/tenant-service/actions/runs/45088141628 |
 | db-helper | `cd99b4508ba4674110484527525ad9b172618b4a` | https://github.com/myothein/db-helper/actions/runs/45092347091 |
 | tenant-agent | `45e568b65e1ea8b5706d1bf7470b8491706edbee` (six-repo source compatibility QA checkpoint) | https://github.com/myothein/tenant-agent/actions/runs/45095727438 |
-| agentctl | `cf3b3c2ff733824f8c99438b9ff02063d3e6fb1d` | https://github.com/myothein/agentctl/actions/runs/45091030970 |
+| agentctl | `9e6a705eb052d17ee07b53f7aaee65776b9bf916` (Node 22 NSSM genuine agent SCM + offline/replay tested) | https://github.com/myothein/agentctl/actions/runs/45097352354 |
 | central-cli | `e3c78a06991c9c64c39a5d57f7297605aa37a3f9` | https://github.com/myothein/central-cli/actions/runs/45089801483 |
 
 All revisions above are immutable commit identifiers, not moving branch tags. Their individual test outcomes are NOT equivalent to a six-component production acceptance.
@@ -30,6 +30,7 @@ All revisions above are immutable commit identifiers, not moving branch tags. Th
 | **Same-database five-repository QA:** compiled Central CLI process lists the tenant used by the PostgreSQL → SQLite → PostgreSQL event pipeline, validates OIDC and rejects TENANT_ADMIN-only token | PASS with real Central API and shared disposable PostgreSQL 17 fixture; no real Keycloak | tenant-agent five-repository E2E run https://github.com/myothein/tenant-agent/actions/runs/45095066247 |
 | agentctl signed artifact verification, simulated rollback and disposable Windows NSSM/SCM start/stop/rollback | PASS on hosted Windows QA, NOT production Windows server | agentctl own CI run |
 | **Same hosted Windows runner:** actual tenant-agent Node process offline/restart/SQLite restore test; pinned agentctl build and safety regression tests; cross-repo installer prerequisite check | **PASS**, but actual signed tenant-agent.exe packaging ABSENT; agentctl refuses service install before NSSM/SCM operations | tenant-agent six-repo CI https://github.com/myothein/tenant-agent/actions/runs/45095727438 |
+| **Genuine Windows SCM runtime:** Node 22 tenant-agent installed through reviewed opt-in `agentctl installNewService` and NSSM, SQLite persists offline event, SCM stop/restart, Central recovery delivery, idempotent replay | **PASS** on disposable GitHub-hosted Windows runner. Signed production artifact/ACL acceptance still OPEN | agentctl https://github.com/myothein/agentctl/actions/runs/45097352354 |
 | Combined six-program installation and single host/distributed deployment | **NOT TESTED** | Outstanding |
 | Real Keycloak, Windows production deployment, live data migration, encrypted backup/restore and UIMS V1 integration | **NOT TESTED** | Outstanding |
 
@@ -41,11 +42,13 @@ All revisions above are immutable commit identifiers, not moving branch tags. Th
 - PostgreSQL tenant isolation: separately scoped tenant database roles and immutable SQL migrations; production DB provisioning and destructive restores remain disabled pending controlled acceptance.
 - Signed Windows updates: agentctl staged verification and rollback QA do not authorize an in-place production update.
 
-## Windows executable/service packaging blocker
+## Windows packaging progress and remaining release blocker
 
-The existing `agentctl install` requires a signed/package-controlled `C:\\Program Files\\TenantAgent\\bin\\tenant-agent.exe` and `agentctl.exe` plus `nssm.exe` and a protected runtime config file. The `tenant-agent` build currently creates a Node.js `dist/index.js`, **not** a `tenant-agent.exe`. CI proves actual Node process resilience but **does not** demonstrate that `agentctl install` can register the authentic tenant-agent service. The cross-repo fail-closed test confirms a missing executable is rejected before any SCM access.
+The default `agentctl install` mode still expects a separately supplied `tenant-agent.exe`, which the TypeScript application does **not** produce. The new **opt-in** `agentctl install --node-runtime` mode instead launches the existing Node 22 `dist/index.js` through NSSM using a reviewed entry path, protected config-file path, and separate `ProgramData` working directory. Its installer validates version/prerequisites and refuses existing services; argument injection and setup rollback regression tests pass.
 
-Before claiming a six-program deployable product, design and approve Node 22-compatible signed executable packaging (or a reviewed Node-as-service launcher with explicit safe parameters), lock distribution hashes/signatures and dependencies, verify NTFS ACLs/config-secret handling, perform real but disposable Windows SCM registration/start/stop/restart with the genuine tenant-agent entrypoint and database recovery, and prove version compatibility/rollback. Do not use the existing synthetic NSSM worker as proof the actual agent is service-ready.
+**Real hosted Windows SCM acceptance PASS:** a compiled genuine tenant-agent (not synthetic worker) was staged with its native SQLite dependencies and run under an actual NSSM/SCM service. The CI tested SQLite persistence while Central is offline, real Windows service stop/restart, delivery after recovery and duplicate replay without extra central records. https://github.com/myothein/agentctl/actions/runs/45097352354
+
+**Still NO-GO:** no production-signed/reproducible Node runtime/application/native-dependencies/NSSM distribution, verified Windows service identity and NTFS ACLs, protected production config custody, live server recovery and backup-restore drills, operator-approved installation/rollback, or real Keycloak validation. Windows CI synthetic HTTP fixtures are not a replacement for an entire six-program production-equivalent deployment. See `myothein/agentctl/docs/WINDOWS_NODE_SERVICE_INSTALL_ACCEPTANCE.md`.
 
 ## Cross-repository GitHub CI privacy requirement
 
@@ -57,7 +60,7 @@ The integration currently checks out public service repositories and downloads i
 2. Establish signed/reproducible release artifacts, trusted update channels, reviewed dependency lockfiles and enforced branch protections.
 3. Exercise real Keycloak login, audience/role/tenant claims, token expiry and revocation, least privilege, rotation and operator audit events.
 4. Prove full schema migration/rollback and data retention, backup encryption, independently verified off-host restore and disaster recovery in production-equivalent Windows/Linux staging.
-5. Build and validate the **complete six-component deployment** with real management CLI operations, Windows signed binaries, Offline-first recovery, actual tenant isolation and cross-component version gates.
+5. Build and validate the **complete six-component deployment** with real management CLI operations, signed Windows runtime/application distribution, Offline-first recovery, actual tenant isolation and cross-component version gates.
 6. Only after independent QA/security approval and signed release GO may the separate UIMS V1 integration work start.
 
 **Constraints:** Do not merge drafts or mutate `main`, rewrite Git history, access production databases, change Windows services, deploy or touch UIMS V1 without explicit permission.
