@@ -1,12 +1,13 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, rmSync } from 'node:fs';
+import fs, { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import Database from 'better-sqlite3';
 import { randomUUID } from 'node:crypto';
 import { LocalEventsSyncService } from '../services/sync-local-events.service.js';
 import { SyncService } from '../services/sync.service.js';
+import { assertValidOutboxSnapshot } from '../services/sqlite-verified-backup.js';
 
 test('Windows SQLite: preserves event identity, deduplicates, backs up live outbox', async () => {
     const originalWorkingDirectory = process.cwd();
@@ -559,5 +560,71 @@ test('Windows SQLite: WAL FULL durability survives close/reopen and native backu
         legacy?.close();
         process.chdir(cwd);
         rmSync(temp, { recursive: true, force: true });
+    }
+});
+
+
+test('Windows SQLite: verified backup atomically refuses overwrite and rejects corruption', async () => {
+    const before = process.cwd();
+    const workspace = mkdtempSync(path.join(tmpdir(), 'agent-verified-backup-'));
+    let canonical: LocalEventsSyncService | undefined;
+    let manual: SyncService | undefined;
+    try {
+        process.chdir(workspace);
+        canonical = new LocalEventsSyncService('tenant_ci_qa');
+        const id = randomUUID();
+        canonical.addToOutbox({
+            id, tenant_code: 'tenant_ci_qa', agent_id: 'tenant-service',
+            aggregate_type: 'Subject', aggregate_id: '73',
+            event_type: 'subject.created', payload: { id: 73, name: 'Synthetic Only' },
+            created_at: '2020-01-01T00:00:00.000Z',
+            occurred_at: '2020-01-01T00:00:00.000Z'
+        });
+        const destination = path.join(workspace, 'hourly-snapshot.db');
+        await canonical.backupTo(destination);
+        assertValidOutboxSnapshot(destination);
+        const verified = new Database(destination, { readonly: true, fileMustExist: true });
+        try {
+            assert.equal(verified.pragma('integrity_check', { simple: true }), 'ok');
+            const row = verified.prepare(
+                'SELECT id, tenantId, sent, status FROM outbox WHERE id=?'
+            ).get(id) as { id: string; tenantId: string; sent: number; status: string };
+            assert.deepEqual(row, {
+                id, tenantId: 'tenant_ci_qa', sent: 0, status: 'pending'
+            });
+        } finally { verified.close(); }
+
+        // If an hourly backup filename collides, do not replace the only
+        // known-good recovery point or leave partial temp files behind.
+        await assert.rejects(() => canonical!.backupTo(destination));
+        assertValidOutboxSnapshot(destination);
+        assert.deepEqual(
+            fs.readdirSync(workspace).filter(file => file.startsWith('.outbox-backup-stage-')),
+            [],
+            'Staging directories must be removed on both success and failure'
+        );
+
+        // The manual SQLite writer uses the same immutable verified-backup contract.
+        canonical.close();
+        canonical = undefined;
+        manual = new SyncService();
+        const manualSnapshot = path.join(workspace, 'manual-snapshot.db');
+        await manual.backupTo(manualSnapshot);
+        assertValidOutboxSnapshot(manualSnapshot);
+        manual.close();
+        manual = undefined;
+
+        // A corrupt file or arbitrary bytes must never pass SQLite verification.
+        const corrupt = path.join(workspace, 'synthetic-corrupt-file.db');
+        fs.writeFileSync(corrupt, Buffer.from('not a valid SQLite database'));
+        assert.throws(() => assertValidOutboxSnapshot(corrupt),
+            /SQLite outbox backup verification failed/);
+        assert.throws(() => assertValidOutboxSnapshot(path.join(workspace,'absent.db')),
+            /SQLite outbox backup verification failed/);
+    } finally {
+        canonical?.close();
+        manual?.close();
+        process.chdir(before);
+        rmSync(workspace, { recursive: true, force: true });
     }
 });
