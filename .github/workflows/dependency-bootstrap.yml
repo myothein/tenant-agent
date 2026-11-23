@@ -148,6 +148,13 @@ jobs:
           ref: e3c78a06991c9c64c39a5d57f7297605aa37a3f9
           path: integration/central-cli
           persist-credentials: false
+      - name: Checkout exact audited db-helper schema (no public raw URLs)
+        uses: actions/checkout@v4
+        with:
+          repository: myothein/db-helper
+          ref: cd99b4508ba4674110484527525ad9b172618b4a
+          path: integration/db-helper
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -167,15 +174,18 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           npm run build
-      - name: Retrieve pinned db-helper migrations (no real environment secrets)
+      - name: Verify pinned db-helper schema and prepare isolated migrations
         shell: bash
         run: |
           set -euo pipefail
+          test "$(git -C integration/db-helper rev-parse HEAD)" = "cd99b4508ba4674110484527525ad9b172618b4a"
           mkdir -p /tmp/ums-integration-migrations
-          URL=https://raw.githubusercontent.com/myothein/db-helper/cd99b4508ba4674110484527525ad9b172618b4a
-          curl -fsSL --retry 3 "$URL/prisma/system/migrations/001_init_system_db/migration.sql" -o /tmp/ums-integration-migrations/system.sql
-          curl -fsSL --retry 3 "$URL/prisma/tenant/migrations/20260106105615_001_tenant_init/migration.sql" -o /tmp/ums-integration-migrations/tenant.sql
-          curl -fsSL --retry 3 "$URL/prisma/tenant/migrations/20260107_add_local_events/migration.sql" -o /tmp/ums-integration-migrations/local_events.sql
+          cp -- integration/db-helper/prisma/system/migrations/001_init_system_db/migration.sql /tmp/ums-integration-migrations/system.sql
+          cp -- integration/db-helper/prisma/tenant/migrations/20260106105615_001_tenant_init/migration.sql /tmp/ums-integration-migrations/tenant.sql
+          cp -- integration/db-helper/prisma/tenant/migrations/20260107_add_local_events/migration.sql /tmp/ums-integration-migrations/local_events.sql
+          test -s /tmp/ums-integration-migrations/system.sql
+          test -s /tmp/ums-integration-migrations/tenant.sql
+          test -s /tmp/ums-integration-migrations/local_events.sql
       - name: Create isolated central and tenant PostgreSQL databases and apply migrations
         shell: bash
         run: |
